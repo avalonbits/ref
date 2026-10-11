@@ -72,8 +72,11 @@ typedef struct {
     uint8_t* worddir;
     uint16_t* wordblk;
     uint8_t* norm;          /* the normalising settings, as stored */
+    uint16_t norm_skips;    /* where in norm the skips' count is */
+    uint16_t norm_stops;    /* and the stop words' */
     uint8_t* scores;        /* 2 * ntopics: search counts */
     uint8_t* bits;          /* 2 * bitmap: a search word's topics */
+    uint8_t* titles;        /* the titles section, once ref_titles loads it */
 } ref_file;
 
 int  ref_open(ref_file* r, const char* path);
@@ -81,6 +84,10 @@ void ref_close(ref_file* r);
 
 void ref_get_topic(const ref_file* r, unsigned num, ref_topic* t);
 int  ref_get_node(ref_file* r, unsigned num, ref_node* n);
+
+/* The whole titles section, read once and kept: a title is a length byte
+ * at its offset, then its bytes. NULL if it cannot be read. */
+const uint8_t* ref_titles(ref_file* r);
 
 /* A title into buf, NUL-terminated; its length, or -1. */
 int ref_title(ref_file* r, uint32_t off, char* buf, int size);
@@ -115,6 +122,10 @@ typedef struct {
  * to max matches in out (key and topic). *count is how many there were in
  * all, which may be more than max. */
 int ref_lookup(ref_file* r, const char* query, ref_match* out, int max, int* count);
+
+/* The keys that start with the query, normalised, in key order: up to max
+ * in out, and how many in all. What search as you type lists first. */
+int ref_keys_from(ref_file* r, const char* query, ref_match* out, int max);
 
 /* --- search ---------------------------------------------------------------- */
 

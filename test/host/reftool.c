@@ -6,16 +6,21 @@
  *   reftool <ref.dat> info              counts and sizes
  *   reftool <ref.dat> norm              each line of stdin, normalised
  *   reftool <ref.dat> lookup            each line of stdin, looked up
+ *   reftool <ref.dat> from              each line of stdin: the keys it starts
  *   reftool <ref.dat> search            each line of stdin, searched
  *   reftool <ref.dat> views             every topic's view: length, bytes
  *   reftool <ref.dat> layout <width>    every topic's view, laid out
  *   reftool <ref.dat> contents          the contents tree, depth first
+ *
+ * -i <file> and -o <file>, after the mode, read and write files instead of
+ * stdin and stdout: the same program, built for the Agon by agondev and by
+ * acc, runs there (test/core.sh) and must answer as the PC build does.
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "../../src/core/refcore.h"
+#include "refcore.h"
 
 #define MAX_MATCH 64
 #define MAX_HITS  100
@@ -29,11 +34,19 @@ static char line[1024];
 static char out[REF_KEY_MAX + 1];
 static char title[REF_TITLE_MAX + 1];
 
+static FILE* in;
+static FILE* out_f;
+
+static void fputc_out(int c)
+{
+    fputc(c, out_f);
+}
+
 static int read_line(void)
 {
     size_t n;
 
-    if (!fgets(line, sizeof line, stdin)) {
+    if (!fgets(line, sizeof line, in)) {
         return 0;
     }
     n = strlen(line);
@@ -50,15 +63,15 @@ static void contents(unsigned node, int depth)
 
     while (node != REF_NONE) {
         if (ref_get_node(&r, node, &n) != 0) {
-            printf("bad node %u\n", node);
+            fprintf(out_f, "bad node %u\n", node);
             exit(1);
         }
         ref_title(&r, n.title, title, sizeof title);
-        printf("%*s%s", depth * 2, "", title);
+        fprintf(out_f, "%*s%s", depth * 2, "", title);
         if (n.topic != REF_NONE) {
-            printf("  [%u]", n.topic);
+            fprintf(out_f, "  [%u]", n.topic);
         }
-        printf("\n");
+        fprintf(out_f, "\n");
         if (n.child != REF_NONE) {
             contents(n.child, depth + 1);
         }
@@ -73,18 +86,18 @@ static void show(const uint8_t* t, const ref_line* ln, int width)
     unsigned k;
 
     if (ln->kind == 0) {
-        printf("\n");
+        fprintf(out_f, "\n");
 
         return;
     }
     for (x = 0; x < ln->x; x++) {
-        putchar(ln->note && x == ln->x - 2 ? '|' : ' ');
+        fputc_out(ln->note && x == ln->x - 2 ? '|' : ' ');
     }
     if (ln->kind == REF_RULE) {
         for (x = ln->x; x < width; x++) {
-            putchar('-');
+            fputc_out('-');
         }
-        printf("\n");
+        fprintf(out_f, "\n");
 
         return;
     }
@@ -101,9 +114,9 @@ static void show(const uint8_t* t, const ref_line* ln, int width)
         while (n && buf[n - 1] == ' ') {
             n--;
         }
-        fwrite(buf, 1, (size_t)n, stdout);
+        fwrite(buf, 1, (size_t)n, out_f);
     }
-    printf("\n");
+    fprintf(out_f, "\n");
 }
 
 int main(int argc, char** argv)
@@ -116,6 +129,20 @@ int main(int argc, char** argv)
 
         return 2;
     }
+    in = stdin;
+    out_f = stdout;
+    for (k = 3; k + 1 < (unsigned)argc; k++) {
+        if (strcmp(argv[k], "-i") == 0) {
+            in = fopen(argv[k + 1], "r");
+        } else if (strcmp(argv[k], "-o") == 0) {
+            out_f = fopen(argv[k + 1], "wb");
+        }
+    }
+    if (!in || !out_f) {
+        fprintf(stderr, "reftool: cannot open its files\n");
+
+        return 1;
+    }
     e = ref_open(&r, argv[1]);
     if (e != REF_OK) {
         fprintf(stderr, "reftool: cannot open %s: %d\n", argv[1], e);
@@ -123,13 +150,13 @@ int main(int argc, char** argv)
         return 1;
     }
     if (strcmp(argv[2], "info") == 0) {
-        printf("commit %s\ndate %s\ntopics %u\nnodes %u\nkeys %lu\nwords %lu\nview %u\n",
+        fprintf(out_f, "commit %s\ndate %s\ntopics %u\nnodes %u\nkeys %lu\nwords %lu\nview %u\n",
                r.commit, r.date, r.ntopics, r.nnodes, (unsigned long)r.nkeys,
                (unsigned long)r.nwords, r.view_size);
     } else if (strcmp(argv[2], "norm") == 0) {
         while (read_line()) {
             ref_normalize(&r, line, out);
-            printf("%s\n", out);
+            fprintf(out_f, "%s\n", out);
         }
     } else if (strcmp(argv[2], "lookup") == 0) {
         while (read_line()) {
@@ -138,26 +165,48 @@ int main(int argc, char** argv)
             int n = count < MAX_MATCH ? count : MAX_MATCH;
             int i;
 
-            printf("%d %d", kind, count);
+            fprintf(out_f, "%d %d", kind, count);
             for (i = 0; i < n; i++) {
-                printf(" %u", matches[i].topic);
+                fprintf(out_f, " %u", matches[i].topic);
             }
-            printf(" |");
+            fprintf(out_f, " |");
             for (i = 0; i < n; i++) {
-                printf(" %s;", matches[i].key);
+                fprintf(out_f, " %s;", matches[i].key);
             }
-            printf("\n");
+            fprintf(out_f, "\n");
+        }
+    } else if (strcmp(argv[2], "from") == 0) {
+        while (read_line()) {
+            int count = ref_keys_from(&r, line, matches, MAX_MATCH);
+            int n = count < MAX_MATCH ? count : MAX_MATCH;
+            int i;
+
+            fprintf(out_f, "%d", count);
+            for (i = 0; i < n; i++) {
+                fprintf(out_f, " %s=%u;", matches[i].key, matches[i].topic);
+            }
+            fprintf(out_f, "\n");
+        }
+    } else if (strcmp(argv[2], "titles") == 0) {
+        /* Every topic's title from the loaded section, as the viewer reads them. */
+        const uint8_t* t = ref_titles(&r);
+        ref_topic tp;
+
+        for (k = 0; k < r.ntopics; k++) {
+            ref_get_topic(&r, k, &tp);
+            fwrite(t + tp.title + 1, 1, t[tp.title], out_f);
+            fputc_out('\n');
         }
     } else if (strcmp(argv[2], "search") == 0) {
         while (read_line()) {
             int n = ref_search(&r, line, hits, MAX_HITS);
             int i;
 
-            printf("%d", n);
+            fprintf(out_f, "%d", n);
             for (i = 0; i < n && i < MAX_HITS; i++) {
-                printf(" %u:%u:%u", hits[i].topic, hits[i].title, hits[i].words);
+                fprintf(out_f, " %u:%u:%u", hits[i].topic, hits[i].title, hits[i].words);
             }
-            printf("\n");
+            fprintf(out_f, "\n");
         }
     } else if (strcmp(argv[2], "views") == 0) {
         for (k = 0; k < r.ntopics; k++) {
@@ -168,9 +217,9 @@ int main(int argc, char** argv)
 
                 return 1;
             }
-            putchar(n & 0xff);
-            putchar((n >> 8) & 0xff);
-            fwrite(r.view, 1, (size_t)n, stdout);
+            fputc_out(n & 0xff);
+            fputc_out((n >> 8) & 0xff);
+            fwrite(r.view, 1, (size_t)n, out_f);
         }
     } else if (strcmp(argv[2], "layout") == 0 && argc > 3) {
         int width = atoi(argv[3]);
@@ -184,16 +233,16 @@ int main(int argc, char** argv)
                 return 1;
             }
             nl = ref_layout(r.view, (unsigned)n, width, lines, MAX_LINES);
-            printf("@@ %u %d\n", k, nl);
+            fprintf(out_f, "@@ %u %d\n", k, nl);
             for (i = 0; i < nl && i < MAX_LINES; i++) {
                 show(r.view, &lines[i], width);
             }
             /* Then the style and link each line starts in. */
             for (i = 0; i < nl && i < MAX_LINES; i++) {
-                printf("%u:%u%c", lines[i].style, lines[i].link, i + 1 < nl ? ' ' : '\n');
+                fprintf(out_f, "%u:%u%c", lines[i].style, lines[i].link, i + 1 < nl ? ' ' : '\n');
             }
             if (nl == 0) {
-                printf("\n");
+                fprintf(out_f, "\n");
             }
         }
     } else if (strcmp(argv[2], "contents") == 0) {
@@ -204,6 +253,9 @@ int main(int argc, char** argv)
         return 2;
     }
     ref_close(&r);
+    if (out_f != stdout) {
+        fclose(out_f);
+    }
 
     return 0;
 }

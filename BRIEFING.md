@@ -307,6 +307,49 @@ core at least).
   keep stack frames under 128 bytes, large buffers static, and measure peak
   heap with zap's `zmalloc` shim rather than guessing.
 
+*As built (step 4)* -- `src/viewer`, on the core:
+
+- **The screen**: the mode and font in use, whatever they are; text is laid
+  out to the width less one column, and nothing is ever written in the last
+  column, so the VDP never wraps or scrolls under ref. The last row is a
+  status line: the topic's place in the tree, and how far down. Each row is
+  drawn whole and sent in one RST 18h call. Colours by role (text, emphasis,
+  code, link, the selected link, headings, notes, status) mapped for 16, 4
+  and 2 colour modes. *Decided* (an open question): the contents replace the
+  topic rather than sitting beside it -- at 80 columns a tree beside the
+  text leaves neither enough room. `t` goes to the contents at the topic's
+  own node, Esc comes back.
+- **Keys**: as planned, plus Tab / Shift+Tab to choose a link, Left/Right to
+  scroll code and tables sideways, `n`/`p` for the next and previous topic,
+  `u` for the section a topic is in, `?` or F1 for help. Keys come from
+  agondev's event queue, so each carries its modifiers as they were.
+- **The command line**, as planned, plus `-p` (print what was found instead
+  of showing it -- scripts, and testing the release build) and `-v` (ref's
+  version and the agon-docs commit its ref.dat holds), and `-T`, which times
+  the core in the machine. Results: 0 when something was shown, 100 when
+  nothing matched or ref.dat cannot be read, with a message saying which.
+- **Measured** (`ref -T`, MOS's own clock, the emulator paced): opening
+  ref.dat 14 ms, a lookup 6-14 ms, a search 38 ms, the keys from a prefix
+  24 ms, the largest topic (VDU Variables, 23 KB of tables) read and laid out
+  182 ms -- 110 ms without the compiler workaround below. Layout was 290 ms
+  at first: a second pass per line to follow styles, and pointers the
+  compiler kept on the stack. One pass, with the plain-text runs crossed by
+  two small leaf functions, fixed both.
+- **Memory**: 35 KB of code, 77 KB of statics, and a heap that peaks at
+  85 KB (zmalloc, a session through a topic, the contents, the largest topic
+  and a search): under 200 KB of the 448 KB a program has.
+
+**A compiler bug** (found in step 4): agondev's clang 15.0.7 at -Oz can
+compile `n = *p++` so that the load happens after the increment -- the
+register coalescer rematerialises the load at the point where the pointer
+has already moved. The reader core read its normalising settings off by
+one: skips never applied on the Agon, while every PC test passed. Building
+with `-mllvm -twoaddr-reschedule=false` (agon.mk) avoids it; a four-line
+reproducer is `n = *p++; *out = p; return n;`, which compiles to
+`inc hl; ld c,(hl)`. `test/core.sh` is what caught it, and is the control:
+without the flag it fails. The settings are also walked by index now. Worth
+reporting to AgonPlatform/agon-llvm-project.
+
 ### Where things go on the card
 
     /bin/ref.bin
@@ -358,6 +401,31 @@ ref must also work without hub, as a plain program.
   wall clock outside: a key lookup, a search, opening the largest topic.
 - Every safeguard has a control: break it, and its test fails.
 
+*As built:*
+
+- `make test` -- the builder (parser, model, keys, normalising, render,
+  layout, LZ4, the file), the core on the PC against the builder, the stack
+  frames, and the core compiling under acc. About 150 tests, 10 seconds.
+- `make emu` (`test/run.sh`) -- in the emulator, MOS 3.0.2, about 45 checks
+  in under a minute: the release build's `-p`, `-v` and exit codes (each
+  under MOS's `Try`, since a failing line stops autoexec); the scripted build
+  through a topic, its links and history, scrolling, lists, search, the
+  contents, find as you type and help; ade's F1 under hub, through a
+  stand-in client (`test/agon/hubf1`) that pushes `ref -k <word>` as a user
+  program and prints the result hub hands back (and hub's own `fail`, as the
+  control); on the full emulator, in modes 3, 8 and 0, the screen read back
+  from the VDP itself (`VDU 23,0,&83`, retried in each role's colours, since
+  the VDP matches in the current text colour) against what ref meant to
+  draw; the heap's peak; and the timings, paced.
+- `test/core.sh` -- the core on the Agon: `test/host/reftool.c`, built by
+  agondev and by acc, runs every mode in the emulator with its inputs and
+  outputs as files on the card, and must answer byte for byte as the PC
+  build does. Slow (about 15 minutes), so not in `make emu`; run it after
+  touching the core or changing compilers.
+- The VDP cannot read back its own last column or last row, so the screen
+  check compares the rest; a wrap or scroll would shift every row, which it
+  would see.
+
 ## Environment
 
 | Tool | Where |
@@ -383,8 +451,8 @@ ref must also work without hub, as a plain program.
 ## Open questions
 
 - The license of agon-docs (blocks publishing).
-- Which mode and font the viewer uses, and whether the contents sit beside
-  the topic or replace it, at 80 columns.
+- Which mode and font the viewer uses. *For now*: whatever is in use; ade
+  hands ref the prompt's screen through hub. The contents replace the topic.
 - How much of the BBC BASIC page to index: its headings only cover what the
   Agon changes; the rest of BBC BASIC is external documentation.
 - Whether `ref.dat` should carry more than agon-docs later -- zap's, acc's,

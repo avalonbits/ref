@@ -19,22 +19,16 @@ static uint8_t qlen[QWORDS];
 
 int ref_stop_word(const ref_file* r, const char* w, unsigned len)
 {
-    const uint8_t* p = r->norm;
-    unsigned n;
+    const uint8_t* s = r->norm;
+    unsigned at = r->norm_stops;
+    unsigned n = s[at];
 
-    p += 1;
-    for (n = r->norm[0]; n; n--) {
-        p += 1 + p[0];                      /* hex_after */
-    }
-    for (n = *p++; n; n--) {
-        p += 1 + p[0];                      /* the skip's prefix */
-        p += 1 + p[0];                      /* its units */
-    }
-    for (n = *p++; n; n--) {
-        if (p[0] == len && memcmp(p + 1, w, len) == 0) {
+    at = at + 1;
+    for (; n > 0; n--) {
+        if (s[at] == len && memcmp(s + at + 1, w, len) == 0) {
             return 1;
         }
-        p += 1 + p[0];
+        at = at + 1 + s[at];
     }
 
     return 0;

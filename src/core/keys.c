@@ -198,6 +198,13 @@ static int starting(ref_file* r, const char* q, unsigned qlen, ref_match* out, i
     return found;
 }
 
+int ref_keys_from(ref_file* r, const char* query, ref_match* out, int max)
+{
+    unsigned qlen = (unsigned)ref_normalize(r, query, probe);
+
+    return qlen ? starting(r, probe, qlen, out, max) : 0;
+}
+
 int ref_lookup(ref_file* r, const char* query, ref_match* out, int max, int* count)
 {
     unsigned qlen = (unsigned)ref_normalize(r, query, probe);

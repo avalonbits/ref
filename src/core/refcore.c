@@ -70,6 +70,53 @@ static uint16_t* index_dir(const uint8_t* dir, unsigned len, unsigned blocks)
     return at;
 }
 
+/* Where the normalising settings' lists start: hex_after words, then the
+ * skips, then the stop words. Walked once, here, by index -- agondev's
+ * clang has been seen to load `n = *p++` from after the increment, and an
+ * index keeps the walk out of that pattern. 0, or -1 if it overruns. */
+static int index_norm(ref_file* r, unsigned len)
+{
+    const uint8_t* s = r->norm;
+    unsigned at = 0;
+    unsigned n;
+
+    if (len < 3) {
+        return -1;
+    }
+    n = s[at];
+    at = at + 1;
+    while (n > 0 && at < len) {
+        at = at + 1 + s[at];
+        n = n - 1;
+    }
+    if (at >= len) {
+        return -1;
+    }
+    r->norm_skips = (uint16_t)at;
+    n = s[at];
+    at = at + 1;
+    while (n > 0 && at < len) {
+        at = at + 1 + s[at];                /* the prefix */
+        if (at >= len) {
+            return -1;
+        }
+        at = at + 1 + s[at];                /* its units */
+        n = n - 1;
+    }
+    if (at >= len) {
+        return -1;
+    }
+    r->norm_stops = (uint16_t)at;
+    n = s[at];
+    at = at + 1;
+    while (n > 0 && at < len) {
+        at = at + 1 + s[at];
+        n = n - 1;
+    }
+
+    return at <= len ? 0 : -1;
+}
+
 int ref_open(ref_file* r, const char* path)
 {
     static uint8_t h[128];
@@ -143,6 +190,11 @@ int ref_open(ref_file* r, const char* path)
 
         return REF_ENOMEM;
     }
+    if (index_norm(r, (unsigned)(r->o_dict - r->o_norm)) != 0) {
+        ref_close(r);
+
+        return REF_EIO;
+    }
     r->keyblk = index_dir(r->keydir, (unsigned)(r->o_words - r->o_keydir), r->nkb);
     r->wordblk = index_dir(r->worddir, (unsigned)(r->o_norm - r->o_worddir), r->nwb);
     if (!r->keyblk || !r->wordblk) {
@@ -170,6 +222,7 @@ void ref_close(ref_file* r)
     free(r->view);
     free(r->scores);
     free(r->bits);
+    free(r->titles);
     memset(r, 0, sizeof *r);
 }
 
@@ -198,6 +251,15 @@ int ref_get_node(ref_file* r, unsigned num, ref_node* n)
     n->next = ref_rd16(b + 8);
 
     return 0;
+}
+
+const uint8_t* ref_titles(ref_file* r)
+{
+    if (!r->titles) {
+        r->titles = load(r, r->o_titles, (unsigned)(r->o_text - r->o_titles));
+    }
+
+    return r->titles;
 }
 
 int ref_title(ref_file* r, uint32_t off, char* buf, int size)

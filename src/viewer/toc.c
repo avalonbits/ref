@@ -1,0 +1,262 @@
+/*
+ * The contents: the nav's sections, their pages and the headings under
+ * them, as a tree that opens and closes. Enter on a topic opens it; Esc
+ * goes back to the topic it was opened from, or quits if there is none.
+ */
+#include <stdlib.h>
+#include <string.h>
+
+#include "ui.h"
+
+#ifdef ZMALLOC
+#include "zmalloc.h"
+#endif
+
+typedef struct {
+    uint32_t title;
+    uint16_t topic;
+    uint16_t child;
+    uint16_t next;
+    uint16_t parent;
+    uint8_t depth;
+    uint8_t open;
+} node;
+
+static node* nodes;
+static uint16_t* rows;              /* the nodes shown, in order */
+static int nrows;
+static int cursor;                  /* a row */
+static int top;
+
+static int load(void)
+{
+    unsigned k;
+
+    if (nodes) {
+        return 0;
+    }
+#ifdef ZMALLOC
+    z_site = "the contents";
+#endif
+    nodes = malloc(book.nnodes * sizeof *nodes);
+    rows = malloc(book.nnodes * sizeof *rows);
+    if (!nodes || !rows) {
+        return -1;
+    }
+    for (k = 0; k < book.nnodes; k++) {
+        ref_node n;
+
+        if (ref_get_node(&book, k, &n) != 0) {
+            return -1;
+        }
+        nodes[k].title = n.title;
+        nodes[k].topic = n.topic;
+        nodes[k].child = n.child;
+        nodes[k].next = n.next;
+        nodes[k].parent = REF_NONE;
+        nodes[k].depth = 0;
+        nodes[k].open = 0;
+    }
+    /* Nodes are in preorder: a parent comes before its children. */
+    for (k = 0; k < book.nnodes; k++) {
+        unsigned c;
+
+        for (c = nodes[k].child; c != REF_NONE && c < book.nnodes; c = nodes[c].next) {
+            nodes[c].parent = (uint16_t)k;
+            nodes[c].depth = (uint8_t)(nodes[k].depth + 1);
+        }
+    }
+    /* The sections start open, showing their pages. */
+    for (k = 0; k != REF_NONE && k < book.nnodes; k = nodes[k].next) {
+        nodes[k].open = 1;
+    }
+
+    return 0;
+}
+
+static void walk(unsigned k)
+{
+    for (; k != REF_NONE && k < book.nnodes; k = nodes[k].next) {
+        rows[nrows++] = (uint16_t)k;
+        if (nodes[k].open) {
+            walk(nodes[k].child);
+        }
+    }
+}
+
+static void rebuild(void)
+{
+    nrows = 0;
+    walk(0);
+}
+
+static int row_of(unsigned k)
+{
+    int r;
+
+    for (r = 0; r < nrows; r++) {
+        if (rows[r] == k) {
+            return r;
+        }
+    }
+
+    return 0;
+}
+
+/* Show the node for topic: its ancestors open, the cursor on it. */
+static void reveal(int topic)
+{
+    unsigned k;
+
+    for (k = 0; k < book.nnodes; k++) {
+        if (nodes[k].topic == (uint16_t)topic) {
+            unsigned p;
+
+            for (p = nodes[k].parent; p != REF_NONE; p = nodes[p].parent) {
+                nodes[p].open = 1;
+            }
+            rebuild();
+            cursor = row_of(k);
+
+            return;
+        }
+    }
+    rebuild();
+}
+
+static void keep_visible(void)
+{
+    if (cursor < 0) {
+        cursor = 0;
+    }
+    if (cursor >= nrows) {
+        cursor = nrows - 1;
+    }
+    if (cursor < top) {
+        top = cursor;
+    }
+    if (cursor >= top + scr_rows) {
+        top = cursor - scr_rows + 1;
+    }
+}
+
+static void draw(void)
+{
+    int r;
+
+    for (r = 0; r < scr_rows; r++) {
+        int i = top + r;
+        const node* n;
+        int d;
+
+        scr_begin(r);
+        if (i >= nrows) {
+            scr_end();
+            continue;
+        }
+        n = &nodes[rows[i]];
+        scr_colour(C_TEXT);
+        for (d = 0; d < n->depth; d++) {
+            scr_adds("  ");
+        }
+        scr_colour(C_DIM);
+        scr_add(n->child == REF_NONE ? ' ' : n->open ? '-' : '+');
+        scr_add(' ');
+        scr_colour(i == cursor ? C_SEL : n->topic == REF_NONE ? C_HEAD : C_TEXT);
+        scr_adds(ui_title_at(n->title));
+        scr_colour(C_TEXT);
+        scr_end();
+    }
+    scr_begin(scr_rows);
+    scr_colour(C_STATUS);
+    scr_adds(" Contents   Enter: open   Right/Left: show/hide   Esc: back");
+    scr_end();
+#ifdef REF_SCRIPT
+    script_log("toc row %d node %d top %d rows %d", cursor, nrows ? rows[cursor] : -1, top, nrows);
+#endif
+}
+
+int toc_loop(int topic)
+{
+    if (load() != 0) {
+        ui_message("The contents could not be read.");
+
+        return -1;
+    }
+    top = 0;
+    cursor = 0;
+    if (topic >= 0) {
+        reveal(topic);
+    } else {
+        rebuild();
+    }
+    keep_visible();
+    scr_cls();
+    draw();
+    for (;;) {
+        key k = in_wait();
+        int m = in_meaning(k);
+        node* n = &nodes[rows[cursor]];
+
+        switch (m) {
+        case K_UP:
+            cursor--;
+            break;
+        case K_DOWN:
+            cursor++;
+            break;
+        case K_PGUP:
+            cursor -= scr_rows - 1;
+            break;
+        case K_PGDN:
+            cursor += scr_rows - 1;
+            break;
+        case K_HOME:
+            cursor = 0;
+            break;
+        case K_END:
+            cursor = nrows - 1;
+            break;
+        case K_RIGHT:
+            if (n->child != REF_NONE && !n->open) {
+                n->open = 1;
+                rebuild();
+            } else if (n->child != REF_NONE) {
+                cursor++;                   /* into it */
+            }
+            break;
+        case K_LEFT:
+            if (n->open) {
+                n->open = 0;
+                rebuild();
+            } else if (n->parent != REF_NONE) {
+                cursor = row_of(n->parent);
+            }
+            break;
+        case K_ENTER:
+            if (n->topic != REF_NONE) {
+                return n->topic;
+            }
+            n->open = !n->open;
+            rebuild();
+            break;
+        case K_FIND:
+            return -2;
+        case K_ESC:
+            return -1;
+        case K_CHAR:
+            if (k.ch == 'q') {
+                return -3;
+            }
+            if (k.ch == '/') {
+                return -2;
+            }
+            if (k.ch == 't' || k.ch == 'c') {
+                return -1;
+            }
+            break;
+        }
+        keep_visible();
+        draw();
+    }
+}

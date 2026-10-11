@@ -1,0 +1,272 @@
+#!/bin/bash
+# ref on the Agon, in fab-agon-emulator (MOS 3.0.2), driven as hub's and
+# zap's harnesses drive it -- see test/emu.sh -- never by typing into stdin.
+#
+#   test/run.sh            every check
+#
+# The interactive checks run the scripted build (REF_SCRIPT): keys come from
+# /ref.keys on the card, and ref writes what it drew to /ref.out, which the
+# checks read back. The release build is checked through -p and its exit
+# codes; under hub, through a stand-in for ade's F1 (test/agon/hubf1); on the
+# full emulator, whose VDP is the real firmware, what ref drew is read back
+# from the VDP itself. Timings are taken paced, from MOS's own clock.
+set -uo pipefail
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+SCRATCH=$(mktemp -d)
+trap 'rm -rf "$SCRATCH"' EXIT
+source "$ROOT/test/emu.sh"
+
+HUB=${HUB:-$HOME/code/devel}
+AGONDEV=${AGONDEV:-$HOME/agondev}
+export PATH=$AGONDEV/bin:$PATH
+
+status=0
+check() {
+    if [ "$2" = "$3" ]; then
+        printf 'PASS  %s\n' "$1"
+    else
+        printf 'FAIL  %s\n      got:  %s\n      want: %s\n' "$1" "$2" "$3"
+        status=1
+    fi
+}
+has() { grep -qF -- "$2" <<< "$1" && echo yes || echo no; }
+
+if [ ! -x "$EMU/agon-cli-emulator" ]; then
+    echo "SKIP  emulator: none at $EMU"
+
+    exit 0
+fi
+
+# --- builds ---
+make -s -C "$ROOT" dat > /dev/null || { echo "FAIL  ref.dat"; exit 1; }
+make -s -C "$ROOT" agon agon-script > /dev/null 2>&1 || { echo "FAIL  build"; exit 1; }
+RELEASE=$ROOT/bin/ref.bin
+SCRIPTED=$ROOT/bin/script/ref.bin
+
+# scripted <command> <keys>: run the scripted ref with these keys (one a
+# line, as input.c reads them); the transcript, \r removed.
+scripted() {
+    local sd
+    sd=$(emu_card "$SCRIPTED")
+    printf '%s\r\n' "$1" > "$sd/autoexec.txt"
+    printf '%s\n' "$2" > "$sd/ref.keys"
+    emu_run "$sd" 120 > /dev/null
+    tr -d '\r' < "$sd/ref.out" 2>/dev/null
+    rm -rf "$sd"
+}
+
+# dump <transcript> <name>: the screen ref drew at dump:<name>.
+dump() {
+    awk -v want="== $2" '$0 == want { p = 1; next } /^== |^key |^exit / { p = 0 } p' <<< "$1"
+}
+
+# --- the release build: printing, and exit codes ---
+sd=$(emu_card "$RELEASE")
+printf 'ref -p -k vdu 23 27 3\r\n' > "$sd/autoexec.txt"
+out=$(emu_run "$sd" 60)
+rm -rf "$sd"
+check "ref -p -k prints the topic" \
+      "$(has "$out" 'VDU 23, 27, 3, x; y;: Draw current bitmap on screen at pixel position x, y')" yes
+check "  all of it" "$(has "$out" 'commands instead.')" yes
+
+sd=$(emu_card "$RELEASE")
+printf 'ref -v\r\n' > "$sd/autoexec.txt"
+out=$(emu_run "$sd" 60)
+rm -rf "$sd"
+version=$(sed -n 's/^#define REF_VERSION "\(.*\)"/\1/p' "$ROOT/src/viewer/version.h")
+commit=$(sed -n 's/^commit \(.\{12\}\).*/\1/p' "$ROOT/SOURCE")
+check "ref -v says its version, and which agon-docs" \
+      "$(grep -a '^ref ' <<< "$out")" "ref $version, agon-docs $commit (2026-07-15)"
+
+# Each command under Try, so autoexec carries on after a failure, and its
+# result shown. 0 when something was found, 100 when not; never 1, 4 or 5.
+sd=$(emu_card "$RELEASE")
+{
+    printf 'Try ref -p -k mos_fopen\r\nShow Try$ReturnCode\r\n'
+    printf 'Try ref -k xyzzy\r\nShow Try$ReturnCode\r\n'
+    printf 'Try ref -p xyzzy plugh\r\nShow Try$ReturnCode\r\n'
+    printf 'Try ref -f /none.dat cd\r\nShow Try$ReturnCode\r\n'
+} > "$sd/autoexec.txt"
+out=$(emu_run "$sd" 60)
+rm -rf "$sd"
+codes=$(grep -a 'Try$ReturnCode' <<< "$out" | grep -oE '[0-9]+$' | tr '\n' ' ')
+check "results: found 0; nothing, nothing searched, no file: 100" "$codes" "0 100 100 100 "
+check "  saying why when nothing matched" "$(has "$out" 'ref: nothing for xyzzy')" yes
+check "  and when there is no ref.dat" "$(has "$out" 'ref: cannot read /none.dat')" yes
+
+# --- a topic, its links and its history ---
+t=$(scripted "ref -k vdu 23 27 3" "dump:open
+tab
+dump:tab
+enter
+dump:link
+back
+dump:back
+alt+right
+dump:forward")
+check "ref -k vdu 23 27 3 opens Draw current bitmap" \
+      "$(dump "$t" open | head -1)" \
+      "VDU 23, 27, 3, x; y;: Draw current bitmap on screen at pixel position x, y"
+check "  Tab selects its first link" "$(grep -c '^view topic 502 top 0 lines 22 sel 4:16$' <<< "$t")" 1
+check "  Enter follows it" "$(dump "$t" link | head -1)" "Bitmap plots (PLOT codes &E8-&EF)"
+check "  the status line says where it is" \
+      "$(dump "$t" link | tail -1 | sed 's/  *[0-9]*%$//')" \
+      " VDU 25: PLOT commands > Bitmap plots (PLOT codes &E8-&EF)"
+check "  Backspace goes back" "$(dump "$t" back | head -1)" \
+      "VDU 23, 27, 3, x; y;: Draw current bitmap on screen at pixel position x, y"
+check "  Alt+Right goes forward again" "$(dump "$t" forward | head -1)" \
+      "Bitmap plots (PLOT codes &E8-&EF)"
+
+# --- scrolling a long topic ---
+t=$(scripted "ref -k VDU 23,0,&A0,1;6" "dump:top
+pgdn
+dump:page
+end
+dump:end
+home
+dump:home")
+check "a buffered command by its sequence: Command 6" \
+      "$(dump "$t" top | head -1)" "Command 6: Conditionally call a buffer"
+check "  PgDn scrolls a page: the rows less the status line, less one" "$(grep -c '^view topic 543 top 23 ' <<< "$t")" 1
+check "  End shows the end, at 100%" "$(dump "$t" end | tail -1 | grep -oE '[0-9]+%$')" "100%"
+check "  Home the top again" "$(dump "$t" home | head -1)" "Command 6: Conditionally call a buffer"
+
+# --- several matches: a list ---
+t=$(scripted "ref mos_f" "dump:list
+down
+down
+enter
+dump:chosen")
+check "ref mos_f lists the keys that start with it" \
+      "$(dump "$t" list | head -3 | sed 's/ *$//')" \
+      " mos_fclose  0x0B: mos_fclose  - What is the MOS API
+ mos_feof  0x0E: mos_feof  - What is the MOS API
+ mos_fgetc  0x0C: mos_fgetc  - What is the MOS API"
+check "  Enter opens the one chosen" "$(dump "$t" chosen | head -1)" "0x0C: mos_fgetc"
+
+# --- search ---
+t=$(scripted "ref -s sprite frame" "dump:results
+enter
+dump:first")
+first=$(dump "$t" results | head -1 | sed 's/^ //; s/  - .*//')
+check "ref -s searches the text, titles first" "$first" "VDU 23, 27, 5: Clear frames in current sprite"
+check "  Enter opens the first" "$(dump "$t" first | head -1)" "VDU 23, 27, 5: Clear frames in current sprite"
+t=$(scripted "ref transparency" "dump:results")
+check "a lookup that finds no key searches the text instead" \
+      "$(dump "$t" results | tail -1 | sed 's/ *$//')" " Search: transparency"
+check "  and lists what it found" "$(dump "$t" results | sed '$d' | grep -c '^ [A-Z]')" 3
+
+# --- the contents, and find as you type ---
+t=$(scripted "ref" "dump:contents
+down
+down
+down
+down
+down
+down
+down
+down
+enter
+dump:api
+c:t
+dump:back
+c:/
+text:mos_fo
+dump:find
+enter
+dump:found")
+check "ref alone shows the contents, by the nav" \
+      "$(dump "$t" contents | head -6 | sed 's/ *$//')" \
+      "- Welcome & getting started
+  + Start here
+  + FAQ
+  + Theory of operation
+  + Programming
+- MOS"
+check "  Enter on a page opens it" "$(dump "$t" api | head -1)" "What is the MOS API"
+check "  t goes back to the contents, at that page" "$(grep -c '^toc row 8 ' <<< "$t")" 2
+check "  / finds as you type: keys first" \
+      "$(dump "$t" find | sed -n 2p | sed 's/ *$//')" " mos_fopen  0x0A: mos_fopen  - What is the MOS API"
+check "  Enter opens it" "$(dump "$t" found | head -1)" "0x0A: mos_fopen"
+
+t=$(scripted "ref -k mos_fopen" "c:t
+dump:deep")
+check "t from a topic deep in a closed page opens its way to it" \
+      "$(dump "$t" deep | grep -c '0x0A: mos_fopen')" 1
+
+# --- help ---
+t=$(scripted "ref -k cd" "c:?
+esc")
+check "? shows the keys" "$(dump "$t" help | sed -n 3p)" "Reading a topic"
+
+# --- under hub, as ade's F1 runs it ---
+if [ -f "$HUB/build/hub.bin" ] && [ -f "$HUB/build/lib/agondev/libhub.a" ]; then
+    make -s -C "$ROOT/test/agon/hubf1" HUB="$HUB" > /dev/null 2>&1
+    sd=$(emu_card "$SCRIPTED")
+    cp "$HUB/build/hub.bin" "$sd/mos/"
+    cp "$ROOT/test/agon/hubf1/bin/hubf1.bin" "$HUB/build/test/fail.bin" "$sd/bin/"
+    printf 'esc\n' > "$sd/ref.keys"
+    printf 'Set Hub$NoPause 1\r\nhubf1 -c fail\r\nhubf1 vdu 23 27 3\r\nhubf1 xyzzy\r\n' > "$sd/script.txt"
+    printf 'hub -f /script.txt\r\n' > "$sd/autoexec.txt"
+    out=$(emu_run "$sd" 120)
+    t=$(tr -d '\r' < "$sd/ref.out")
+    rm -rf "$sd"
+    results=$(grep -a '^f1 back' <<< "$out" | grep -oE 'result [0-9]+' | tr '\n' ',')
+    check "under hub: the control fails 19, ref shows a topic 0, and finds nothing 100" \
+          "$results" "result 19,result 0,result 100,"
+    check "  ref ran as the user program, on vdu 23 27 3" "$(grep -c '^view topic 502 ' <<< "$t")" 1
+else
+    echo "SKIP  hub: no hub build at $HUB"
+fi
+
+# --- on the real VDP: what ref drew, read back ---
+if [ -x "$EMU/fab-agon-emulator" ]; then
+    for mode in 3 8 0; do
+        sd=$(emu_card "$SCRIPTED")
+        printf 'VDU 22 %s\r\nref -k vdu 23 27 3\r\n' "$mode" > "$sd/autoexec.txt"
+        printf 'tab\ndump:screen\nvdp:screen\nesc\n' > "$sd/ref.keys"
+        emu_run "$sd" 300 full > /dev/null
+        t=$(tr -d '\r' < "$sd/ref.out" 2>/dev/null)
+        rm -rf "$sd"
+        drawn=$(dump "$t" screen | sed '$d')
+        width=$(dump "$t" screen | awk '{ if (length > w) w = length } END { print w }')
+        # The VDP cannot read back its last column or row: compare the rest.
+        read=$(awk -v want="== vdp screen" '$0 == want { p = 1; next } /^== |^key |^exit / { p = 0 } p' <<< "$t" \
+               | sed '$d' | cut -c1-$((width)) | sed 's/ *$//')
+        check "mode $mode: the VDP shows what ref drew, nothing wrapped or scrolled" \
+              "$(sed 's/ *$//' <<< "$drawn" | md5sum)" "$(md5sum <<< "$read")"
+        check "  and the topic is there" "$(has "$read" 'Draw current')" yes
+        check "  laid out to the screen's width, less its last column" "$width" \
+              "$([ "$mode" = 8 ] && echo 39 || echo 79)"
+    done
+else
+    echo "SKIP  real VDP: no full emulator"
+fi
+
+# --- memory: the heap's peak, measured by zap's zmalloc shim ---
+make -s -C "$ROOT" agon-heap > /dev/null 2>&1
+sd=$(emu_card "$ROOT/bin/heap/ref.bin")
+printf 'ref -k vdu 23 27 3\r\n' > "$sd/autoexec.txt"
+# A topic, the contents, the largest topic through find, then a search.
+printf 'c:t\ndown\nright\nc:/\ntext:vdu variables\nenter\nend\nc:/\ntext:sprite\nenter\nesc\n' \
+    > "$sd/ref.keys"
+out=$(emu_run "$sd" 60)
+t=$(tr -d '\r' < "$sd/ref.out")
+rm -rf "$sd"
+grep -aA4 '^peak' <<< "$out" | sed 's/^/HEAP  /'
+peak=$(grep -a '^peak' <<< "$out" | awk '{ print $2 }')
+check "the session reached the largest topic" "$(grep -c '^view topic 660 ' <<< "$t")" 2
+check "the heap's peak is under 100 KB" "$([ "${peak:-999999}" -lt 102400 ] && echo yes)" yes
+
+# --- speed, in the machine ---
+sd=$(emu_card "$RELEASE")
+printf 'ref -T\r\n' > "$sd/autoexec.txt"
+out=$(emu_run "$sd" 120 cli paced)
+rm -rf "$sd"
+grep -aE '^(open|lookup|search|keys|read|view) ' <<< "$out" | sed 's/^/TIME  /'
+cs() { grep -a "^$1 " <<< "$out" | awk '{ print int($2) }'; }
+check "a lookup takes under 5 cs" "$([ "$(cs lookup)" -lt 5 ] && echo yes)" yes
+check "a search takes under 10 cs" "$([ "$(cs search)" -lt 10 ] && echo yes)" yes
+check "the largest topic opens in under 20 cs" "$([ "$(cs view)" -lt 20 ] && echo yes)" yes
+
+exit $status

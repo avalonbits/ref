@@ -104,6 +104,27 @@ class Core(unittest.TestCase):
                 elif res[0] != 'none':
                     self.assertEqual([int(t) for t in topics], sorted(res[-1])[:64])
 
+    def test_keys_from(self):
+        b, _ = built()
+        r = load_rules()
+        ix = keys.build(b, r)
+        from refbuild.normalize import normalize
+        qs = ['mos_f', 'vdu 23 27', 'plot 8', 'cd', 'zzz', '', 'VDU 23,0,&A0,1;']
+        got = run('from', qs).decode('latin-1').split('\n')
+        for q, g in zip(qs, got):
+            n = normalize(q, r.normalize)
+            want = [(k.key, k.topic) for k in ix.keys if n and k.key.startswith(n)]
+            count, *rest = g.split(' ', 1)
+            pairs = [tuple(x.strip().rsplit('=', 1)) for x in (rest[0].split(';')[:-1] if rest else [])]
+            with self.subTest(q=q):
+                self.assertEqual(int(count), len(want))
+                self.assertEqual([(k, int(t)) for k, t in pairs], want[:64])
+
+    def test_titles_section(self):
+        b, _ = built()
+        got = run('titles').decode('latin-1').split('\n')[:-1]
+        self.assertEqual(got, [render.agon_bytes(t.title)[:255].decode('latin-1') for t in b.topics])
+
     def test_searches_agree(self):
         b, out = built()
         rnd = random.Random(3)

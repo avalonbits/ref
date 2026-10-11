@@ -192,14 +192,15 @@ static void tokenise(const char* text)
 
 static int in_hex_after(const ref_file* r, const char* s, unsigned len)
 {
-    const uint8_t* p = r->norm;
-    unsigned n = *p++;
+    const uint8_t* w = r->norm;
+    unsigned n = w[0];
+    unsigned at = 1;
 
-    while (n--) {
-        if (p[0] == len && memcmp(p + 1, s, len) == 0) {
+    for (; n > 0; n--) {
+        if (w[at] == len && memcmp(w + at + 1, s, len) == 0) {
             return 1;
         }
-        p += 1 + p[0];
+        at = at + 1 + w[at];
     }
 
     return 0;
@@ -242,6 +243,7 @@ int ref_normalize(const ref_file* r, const char* text, char* out)
     const uint8_t* best_units = NULL;
     unsigned nbest_units = 0;
     const uint8_t* p;
+    unsigned at;
     int hex_next;
 
     tokenise(text);
@@ -295,21 +297,20 @@ int ref_normalize(const ref_file* r, const char* text, char* out)
 
     /* Step 6: the longest skip whose prefix the tokens start with. */
     p = r->norm;
-    p += 1;
-    for (n = r->norm[0]; n; n--) {
-        p += 1 + p[0];                      /* past the hex_after words */
-    }
-    for (n = *p++; n; n--) {
-        unsigned plen = *p++;
-        unsigned m = prefix_match(p, plen);
-        const uint8_t* units = p + plen + 1;
+    at = r->norm_skips;
+    n = p[at];
+    at = at + 1;
+    for (; n > 0; n--) {
+        unsigned plen = p[at];
+        unsigned m = prefix_match(p + at + 1, plen);
 
+        at = at + 1 + plen;                 /* now at the count of units */
         if (m > best) {
             best = m;
-            best_units = units;
-            nbest_units = p[plen];
+            best_units = p + at + 1;
+            nbest_units = p[at];
         }
-        p = units + p[plen];
+        at = at + 1 + p[at];
     }
     if (best) {
         unsigned src = best;

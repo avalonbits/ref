@@ -31,6 +31,7 @@ for f in src/core/*.c src/viewer/*.c; do
     "$CC" -mllvm -z80-gas-style -mllvm -z80-print-zero-offset -nostdinc \
           -Isrc/core -isystem "$TOOLCHAIN/include" -target ez80-none-elf \
           -DAGONDEV -Oz -Wa,-march=ez80+full -fno-threadsafe-statics \
+          -mllvm -twoaddr-reschedule=false \
           -S "$f" -o "$OUT/$(basename "$f" .c).s" 2>/dev/null \
         || { echo "FAIL  frames: could not compile $f"; exit 1; }
 done
