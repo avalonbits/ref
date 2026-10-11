@@ -23,6 +23,16 @@ class Headings(unittest.TestCase):
         blocks = parse('```c\n#include "agon/vdp.h"\n```')
         self.assertEqual([type(b) for b in blocks], [md.Code])
 
+    def test_setext(self):
+        h1, p, h2 = parse('VDP Buffered Commands API\n=========================\n\nText.\n\nPart\n----')
+        self.assertEqual((h1.level, md.plain(h1.inlines), h1.line), (1, 'VDP Buffered Commands API', 1))
+        self.assertEqual((h2.level, md.plain(h2.inlines)), (2, 'Part'))
+
+    def test_setext_ends_a_paragraph(self):
+        p, h = parse('one\ntwo\n===')
+        self.assertEqual(md.plain(p.inlines), 'one')
+        self.assertEqual(md.plain(h.inlines), 'two')
+
     def test_line_numbers(self):
         blocks = parse('# One\n\ntext\n\n## Two')
         self.assertEqual([b.line for b in blocks], [1, 3, 5])

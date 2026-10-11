@@ -12,3 +12,189 @@ page = "mos/API.md"
 href = "#VDP-pflags-vdpflags"
 to = "#vdp-pflags-vdpflags"
 why = "the heading's anchor is lower case: the link is broken on the site too"
+
+# --- normalising ---------------------------------------------------------------
+#
+# Applied to keys and to what the user types alike; ref.dat carries these so
+# the viewer normalises exactly as the builder did. See refbuild/normalize.py.
+
+[normalize]
+# RST addresses are hex, written or not: `rst 10` is RST 10h.
+hex_after = ["rst"]
+
+[[skip]]
+prefix = "VDU 23, 0, &A0"
+units = [2]
+why = "every buffered command names a 16-bit buffer ID before its command number"
+
+[[skip]]
+prefix = "VDU 23, 0, &85"
+units = [1]
+why = "every audio command names a channel before its command number"
+
+# --- pages ---------------------------------------------------------------------
+
+[[page]]
+file = "vdp/VDU-Commands.md"
+vdu = true
+
+[[page]]
+file = "vdp/Screen-Modes.md"
+vdu = true
+
+[[page]]
+file = "vdp/System-Commands.md"
+vdu = true
+
+[[page]]
+file = "vdp/PLOT-Commands.md"
+vdu = true
+plot = true
+
+[[page]]
+file = "vdp/Bitmaps-API.md"
+vdu = true
+
+[[page]]
+file = "vdp/Buffered-Commands-API.md"
+vdu = true
+
+[[page]]
+file = "vdp/Enhanced-Audio-API.md"
+vdu = true
+
+[[page]]
+file = "vdp/Context-Management-API.md"
+vdu = true
+
+[[page]]
+file = "vdp/Copper-API.md"
+vdu = true
+
+[[page]]
+file = "vdp/Font-API.md"
+vdu = true
+
+[[page]]
+file = "vdp/Tile-Engine.md"
+vdu = true
+
+[[page]]
+file = "mos/API.md"
+[[page.heading]]
+match = '^(0x[0-9A-Fa-f]+): (\w+)'
+keys = ["{2}", "mos {1}"]
+[[page.heading]]
+match = '^RST (\w+):'
+keys = ["rst {1}"]
+[[page.code]]
+# The sysvars, from the EQUs under System State Information.
+match = '^(sysvar_\w+):'
+
+[[page]]
+file = "mos/C-Functions.md"
+[[page.heading]]
+match = '^0x[0-9A-Fa-f]+ - .*?([A-Za-z_]\w*)\s*\('
+keys = ["{1}"]
+
+[[page]]
+file = "mos/Star-Commands.md"
+heading_code = true
+[[page.body]]
+# "(Aliases include `Dir` and `.`)" -- not "(Alias for `Cat`)", which is the
+# alias's own entry pointing the other way.
+match = '\(Aliases? include ([^)]*)\)'
+
+[[page]]
+file = "mos/System-Variables.md"
+heading_code = true
+
+[[page]]
+file = "BBC-BASIC-for-Agon.md"
+[[page.heading]]
+match = '^([A-Z]+\$?)$'
+keys = ["{1}"]
+
+# Pages of prose: their headings' words, and no gaps.
+[[page]]
+file = "VDP.md"
+vdu = true
+prose = true
+
+[[page]]
+file = "index.md"
+prose = true
+
+[[page]]
+file = "FAQ.md"
+prose = true
+
+[[page]]
+file = "Theory-of-operation.md"
+prose = true
+
+[[page]]
+file = "Programming.md"
+prose = true
+
+[[page]]
+file = "MOS.md"
+prose = true
+
+[[page]]
+file = "mos/Executables.md"
+prose = true
+
+[[page]]
+file = "mos/Modules.md"
+prose = true
+
+[[page]]
+file = "mos/Argument-Substitution.md"
+prose = true
+
+[[page]]
+file = "mos/Keyboard.md"
+prose = true
+
+[[page]]
+file = "vdp/VDP-Variables.md"
+prose = true
+
+[[page]]
+file = "GPIO.md"
+prose = true
+
+[[page]]
+file = "Updating-Firmware.md"
+prose = true
+
+[[page]]
+file = "External-Documentation.md"
+prose = true
+
+[[page]]
+file = "Third-Party-Projects.md"
+prose = true
+
+[[page]]
+file = "Projects.md"
+prose = true
+
+# --- keys no heading gives -----------------------------------------------------
+
+[[key]]
+page = "vdp/Buffered-Commands-API.md"
+keys = ["VDU 23, 0, &A0"]
+why = "the page's own heading names the API, not its command"
+
+[[key]]
+page = "vdp/Enhanced-Audio-API.md"
+keys = ["VDU 23, 0, &85"]
+why = "the page's own heading names the API, not its command"
+
+[[key]]
+page = "mos/Star-Commands.md"
+anchor = "comment-hash"
+keys = ["#"]
+why = "the heading quotes the character rather than marking it as code"

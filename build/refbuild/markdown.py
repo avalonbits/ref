@@ -113,6 +113,7 @@ TABLE_SEP = re.compile(r'^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$')
 FOOTNOTE_DEF = re.compile(r'^\[\^([^\]]+)\]:\s?(.*)$')
 LINKREF_DEF = re.compile(r'^ {0,3}\[([^\]^][^\]]*)\]:\s*(\S+)(?:\s+["\'(].*["\')])?\s*$')
 QUOTE = re.compile(r'^ {0,3}> ?(.*)$')
+SETEXT = re.compile(r'^ {0,3}(=+|-+) *$')
 
 
 def expand_tabs(s):
@@ -208,6 +209,19 @@ class _BlockParser:
                 i = self._admonition(lines, i, m, out)
                 continue
 
+            # A setext heading: a line of text underlined with = or -.
+            if i + 1 < len(lines) and indent_of(s) < 4 and SETEXT.match(lines[i + 1][1]) \
+                    and not LIST_ITEM.match(s) and not QUOTE.match(s) and '|' not in s:
+                level = 1 if lines[i + 1][1].strip()[0] == '=' else 2
+                body, hid = s.strip(), None
+                a = ATTR.search(body)
+                if a and '#' in a.group(1):
+                    body = body[:a.start()].rstrip()
+                    hid = a.group(1).split('#')[1].split()[0]
+                out.append(Heading(level, self.inlines(body), hid, ln))
+                i += 2
+                continue
+
             m = FOOTNOTE_DEF.match(s) if indent_of(s) < 4 else None
             if m:
                 i = self._footnote(lines, i, m)
@@ -244,6 +258,8 @@ class _BlockParser:
     def _starts_block(self, lines, i):
         ln, s = lines[i]
         if is_blank(s):
+            return True
+        if i + 1 < len(lines) and SETEXT.match(lines[i + 1][1]) and indent_of(s) < 4:
             return True
         if indent_of(s) < 4:
             t = s.lstrip(' ')

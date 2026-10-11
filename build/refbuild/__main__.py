@@ -9,7 +9,7 @@ import argparse
 import os
 import sys
 
-from . import book, report, rules, source
+from . import book, keys, report, rules, source
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))     # build/
 ROOT = os.path.dirname(HERE)
@@ -22,6 +22,10 @@ def main(argv=None):
     ap.add_argument('--rules', default=os.path.join(HERE, 'rules.toml'))
     ap.add_argument('--cache', default=os.path.join(HERE, 'cache'))
     ap.add_argument('--report', help='write the report here as well as a summary to stdout')
+    ap.add_argument('--gaps', default=os.path.join(HERE, 'gaps.txt'),
+                    help='the gaps already known; new ones are listed in the summary')
+    ap.add_argument('--write-gaps', action='store_true',
+                    help='record the current gaps as known')
     args = ap.parse_args(argv)
 
     src = source.read_source(args.source)
@@ -36,11 +40,27 @@ def main(argv=None):
 
         return 1
 
-    text = report.report(b, src)
+    try:
+        ix = keys.build(b, rl)
+    except ValueError as e:
+        print(e, file=sys.stderr)
+
+        return 1
+    if ix.unused_rules:
+        for u in ix.unused_rules:
+            print(u, file=sys.stderr)
+        print('rules that apply to nothing: fix build/rules.toml', file=sys.stderr)
+
+        return 1
+
+    if args.write_gaps:
+        report.write_gaps(args.gaps, ix.gaps)
+    known = report.read_gaps(args.gaps)
+    text = report.report(b, src, ix, known)
     if args.report:
         with open(args.report, 'w') as f:
             f.write(text)
-    print(report.summary(b, src))
+    print(report.summary(b, src, ix, known))
 
     return 0
 

@@ -194,7 +194,8 @@ for it in a list of matches. Where they come from:
 - **Star commands** by name, and their documented abbreviations.
 - **System variables** by name (`run$path`), and sysvars from the API's tables
   (`sysvar_scrmode`) where the rules file says a table's first column is a
-  name.
+  name. (At f9806bd the API lists them as EQUs in a code block, so the rule
+  is a regex over code lines.)
 - **PLOT codes**: each code in a heading's range, so `plot 85` finds the filled
   triangles.
 - **BBC BASIC keywords** from that page's headings.
@@ -204,6 +205,29 @@ for it in a list of matches. Where they come from:
 `23;27;0x21` and `vdu 23 27 33 5 0` all reach `vdu 23 27 33`: when there is no
 exact match, the longest key the query starts with wins, then the keys that
 start with the query are offered as a list. Case never matters.
+
+*As built (step 2)* -- `build/refbuild/normalize.py` is the specification,
+and `build/tests/normalize.json` the cases the C must pass too:
+
+- **Skips** stand in for the parameter a command family names before its
+  command number: the buffer ID of `VDU 23, 0, &A0` and the channel of
+  `VDU 23, 0, &85`. Whatever is written there becomes `_`, so
+  `VDU 23,0,&A0,1;6`, `vdu 23 0 160 1 0 6` (the ID as two bytes) and the
+  docs' `bufferId; 6` all give `vdu 23 0 160 _ 6`. The rules file declares
+  the skips, and ref.dat carries them so the viewer normalises the same way.
+- Bare numbers after `rst` are hex (`rst 10` is RST 10h); everywhere else
+  they are decimal, as MOS reads them.
+- A query that starts with a number is a VDU sequence (`23 27 3`).
+- A key up to a `$` counts as a prefix: `hotkey$12` finds `Hotkey$<n>`.
+  `vdu` alone never does, or every unknown sequence would open the `VDU` star
+  command.
+- Numbers are never title words: `0x16: mos_uclose` must not answer `vdu 22`.
+- Star command abbreviations (`DEL.`) need nothing of their own: the dot is
+  stripped, and the keys that start with `del` are offered.
+- Gaps: the 113 headings at f9806bd that no rule keys -- prose sections such
+  as "Advice on file handling" -- are recorded in `build/gaps.txt`; the
+  builder lists any heading missing from it as a new gap, and a test fails
+  on one. A page with no rules at all is nothing but gaps.
 
 ### The full-text index
 
