@@ -379,6 +379,13 @@ ref must also work without hub, as a plain program.
 | 5. ade | tell ade the command line; it wires F1 | F1 in ade opens the topic and comes back |
 | 6. release | once the license is settled: a release with `ref.bin`, `ref.dat` and the builder, in the user's release page format | -- |
 
+*Status (11 October 2026):* steps 1-4 done, each in its own commit. Step 5:
+the ade session (ade-99) has been sent the command line and the result
+contract; wiring F1 is ade's. Step 6 waits on the license: `mkrelease.sh`
+builds the two zips locally (`ref-<version>.zip` for the card,
+`ref-builder-<version>.zip`), and refuses to run until
+`REF_LICENSE_SETTLED=1` says the license is settled. Nothing is published.
+
 ## Testing
 
 - **The builder** has host tests: given pages, these topics, these keys, these
