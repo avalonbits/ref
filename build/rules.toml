@@ -1,0 +1,14 @@
+# ref's rules for agon-docs: how the builder reads the wiki at the commit in
+# SOURCE. Each rule says why it is there; when the wiki changes, the builder
+# reports a rule that no longer applies.
+
+# --- links the wiki gets wrong -------------------------------------------------
+#
+# A link the builder cannot resolve stops the build. When the fault is the
+# wiki's, it is fixed here, never by skipping the link.
+
+[[link_fix]]
+page = "mos/API.md"
+href = "#VDP-pflags-vdpflags"
+to = "#vdp-pflags-vdpflags"
+why = "the heading's anchor is lower case: the link is broken on the site too"

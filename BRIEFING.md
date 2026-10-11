@@ -43,9 +43,12 @@ builder and the viewer are the user's own code either way. Do not publish a
 
 ## The source, as it stands
 
-At commit `f9806bd` (15 July 2026) agon-docs is a MkDocs site: 34 Markdown
-files, about 800 KB of text, and one image (a jumper diagram, which ref skips
-with a note). Its navigation is in `mkdocs.yml`:
+At commit `f9806bd` (15 July 2026) agon-docs is a MkDocs site: 32 Markdown
+pages, 637 KB of text, and seven images (font map, hexload diagram, GPIO
+pinouts), which ref replaces with a note. 31 pages are in the nav; the
+32nd, `Projects.md`, is outside it but linked from the start page, and MkDocs
+builds it all the same, so ref keeps it in a last contents section of its
+own ("Pages outside the menu"). Its navigation is in `mkdocs.yml`:
 
     Welcome & getting started: Start here, FAQ, Theory of operation, Programming
     MOS: Overview, Command line, API, C functions, Executable format, Modules,
@@ -66,6 +69,15 @@ The Markdown uses MkDocs extensions: `{#anchor}` ids on headings,
 admonitions (`!!! note`), footnotes, collapsible details, code blocks, and
 tables (the system commands page alone has about 80 table rows). Read
 `markdown_extensions` in `mkdocs.yml` and handle each one the pages use.
+
+What the builder found (step 1): the pages use admonitions (`note`,
+`danger`), footnotes (Theory of operation only), front matter and `[TOC]`
+(FAQ), attr_list ids on headings *and on table cells* (`{#last-colour}` in
+the VDP variables tables, which other pages link to), one block quote, and
+`<br>`. No details, tabs, mermaid, maths, snippets or emoji. One internal
+link is wrong in the wiki itself (`#VDP-pflags-vdpflags` on the MOS API page,
+whose heading's anchor is lower case -- broken on the site too); it is fixed
+in `build/rules.toml`, which says why, and an unused fix stops the build.
 
 **The headings are the index.** Most entries are already headings, with the
 thing being described in backticks:
@@ -106,6 +118,14 @@ commit and the date). Steps:
    up to the next heading of the same or a higher level. Each page's top is a
    topic too. Every topic keeps its page, its parent topic and its children,
    so the contents tree goes from page to section to entry.
+   *Decided:* each topic stores only its own text, up to the next heading of
+   any level. Its descendants are numbered straight after it, so "the heading
+   and what follows it" is the topic followed by its descendants, and the
+   viewer joins them when it shows a topic. Storing every ancestor's copy
+   would put each page in the file three or four times.
+   A page that opens with its only level-1 heading uses that heading as its
+   top topic; otherwise (BBC BASIC, Font API, External documentation) the top
+   topic is the text before the first heading, titled from the nav.
 4. **Resolve links** -- to other pages, to `#anchors`, to headings -- into
    topic numbers. A link the builder can't resolve is an error, reported with
    its page and line, never a silent dead link. External links stay as text
