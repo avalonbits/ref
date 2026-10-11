@@ -113,6 +113,7 @@ REACHES = [
     ('rst 8', 'mos/API.md', 'RST 08h'),
     ('rst 10', 'mos/API.md', 'RST 10h'),
     ('RST 18H', 'mos/API.md', 'RST 18h'),
+    ('rst 38', 'mos/API.md', 'RST 38h'),
     ('sysvar_scrmode', 'mos/API.md', 'System State Information'),
     ('sysvar_keyascii', 'mos/API.md', 'System State Information'),
     ('f_printf', 'mos/C-Functions.md', '0x05 - int'),

@@ -40,6 +40,16 @@ class Shared(unittest.TestCase):
         self.assertEqual(r.normalize, cfg)
 
 
+class Idempotent(unittest.TestCase):
+    def test_every_key_normalises_to_itself(self):
+        # A key, typed as the list shows it, must find itself.
+        from refbuild import keys
+        from .agon_docs import load_rules, the_book
+        r = load_rules()
+        bad = [k.key for k in keys.build(the_book(), r).keys if normalize(k.key, r.normalize) != k.key]
+        self.assertEqual(bad, [])
+
+
 class Pieces(unittest.TestCase):
     def test_wide(self):
         self.assertEqual(tokens('1; 2 ;3,4'), [('1', True), ('2', True), ('3', False), ('4', False)])

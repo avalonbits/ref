@@ -29,7 +29,7 @@ def new_gaps(ix, known):
     return [g for g in ix.gaps if gap_line(g) not in known]
 
 
-def summary(b, src, ix=None, known=frozenset()):
+def summary(b, src, ix=None, known=frozenset(), built=None):
     pages = len(b.pages)
     out = [
         f'agon-docs {src.commit[:7]} ({src.date})',
@@ -44,12 +44,23 @@ def summary(b, src, ix=None, known=frozenset()):
         out.append(f'gaps       {len(ix.gaps)} headings with no key, {len(new)} new')
         for g in new:
             out.append(f'  new gap  {g[0]}:{g[1]}: {g[2]}')
+    if built is not None:
+        raw = sum(len(t) for t in built.texts)
+        joined = sum(1 for s in built.spans if s)
+        out.append(f'words      {len(built.index)} in the full-text index')
+        out.append(f'text       {raw} bytes, {built.sizes["text"]} compressed '
+                   f'(with a {len(built.dictionary)}-byte dictionary)')
+        out.append(f'joined     {joined} topics shown with their descendants')
+        out.append(f'buffers    view {built.view_size} bytes, '
+                   f'largest compressed topic {built.max_packed}')
+        out.append('ref.dat    ' + ', '.join(f'{k} {v}' for k, v in built.sizes.items()))
+        out.append(f'           {len(built.data)} bytes in all')
 
     return '\n'.join(out)
 
 
-def report(b, src, ix=None, known=frozenset()):
-    out = [summary(b, src, ix, known), '', '# images skipped']
+def report(b, src, ix=None, known=frozenset(), built=None):
+    out = [summary(b, src, ix, known, built), '', '# images skipped']
     for page, line, srcpath in b.images:
         out.append(f'{page}:{line}: {srcpath}')
     if ix is not None:

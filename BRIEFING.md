@@ -154,6 +154,20 @@ because the screen width depends on the mode and font:
 - Characters outside the Agon's font are replaced by the builder (quotes,
   dashes, arrows, the `§§` markers on the VDU page, which are footnote marks
   and become `*`).
+  *Decided:* the VDP's system font is Windows-1252 above 0x7F, nearly, with
+  `§` at 0xA7 -- so the `§` markers are kept as they are: each count of them
+  means a different VDP version, which `*` would lose. Arrows go to the
+  font's own (0x8D, 0x8F, 0x90); it has no down arrow, so that one is `v`.
+
+*As built (step 3)* -- `build/refbuild/render.py` specifies the markup and
+`build/refbuild/layout.py` the layout, which the C reproduces line for line.
+Blocks are `kind|flags indent hang content END`; runs of spaces are one space
+(the wiki puts two after a full stop); tables are ruled columns laid out to
+78 columns, cells wrapped within them, links inside cells kept. A topic
+shown without its descendants -- because together they pass 16 KB --
+ends with "In this section:" and a link to each child. Each line the core
+lays out records the style and link open where it starts, so the viewer can
+draw any line alone.
 
 ### `ref.dat`
 
@@ -176,6 +190,27 @@ format, or one designed here), chosen so the eZ80 decompresses it fast and the
 code is small. Measure the ratio on the real pages; expect the file around
 300-400 KB. A topic's text is usually a few KB; the biggest topics set the
 viewer's buffer size, which the builder reports.
+
+*Measured (step 3):* LZ4's block format. Topics compressed one by one came
+to 424 KB from 698 KB -- most topics are small, and LZ4 finds little inside
+one. An 8 KB dictionary of strings common to many topics, which every
+topic's matches may reach into, brings them to 337 KB; ref.dat is 473 KB in
+all (`build/refbuild/refdat.py` documents every byte). The view buffer is
+23.4 KB (VDP Variables, one topic of tables); the largest compressed topic
+3.6 KB. The full-text index's stop words travel in ref.dat with the
+normalising settings, so the C has no list of its own, and a search reads
+at most eight query words.
+
+*Tested (step 3):* `make test` builds the core for the PC (`out/host/reftool`,
+with the address and undefined-behaviour sanitisers) and holds it against the
+builder: the shared normalising cases, every key the builder wrote, 280
+lookups and 170 searches compared answer for answer, every topic's view byte
+for byte, and every topic laid out at 79 and 39 columns line for line, with
+each line's style. The core also compiles under acc, and its stack frames
+stay under 128 bytes (`test/frames.sh`, as in aed and ade). Found on the way:
+`rst 10h` became the key `rst 16`, which a lookup then read as hex -- so
+after `rst` numbers are written back in hex, and every key normalises to
+itself (a test).
 
 ### The keyword index
 

@@ -9,7 +9,7 @@ import argparse
 import os
 import sys
 
-from . import book, keys, report, rules, source
+from . import book, keys, refdat, report, rules, source
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))     # build/
 ROOT = os.path.dirname(HERE)
@@ -21,6 +21,8 @@ def main(argv=None):
     ap.add_argument('--source', default=os.path.join(ROOT, 'SOURCE'))
     ap.add_argument('--rules', default=os.path.join(HERE, 'rules.toml'))
     ap.add_argument('--cache', default=os.path.join(HERE, 'cache'))
+    ap.add_argument('-o', '--output', default=os.path.join(ROOT, 'out', 'ref.dat'),
+                    help='where to write ref.dat')
     ap.add_argument('--report', help='write the report here as well as a summary to stdout')
     ap.add_argument('--gaps', default=os.path.join(HERE, 'gaps.txt'),
                     help='the gaps already known; new ones are listed in the summary')
@@ -53,14 +55,20 @@ def main(argv=None):
 
         return 1
 
+    built = refdat.build(b, ix, rl, src)
+    os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
+    with open(args.output, 'wb') as f:
+        f.write(built.data)
+
     if args.write_gaps:
         report.write_gaps(args.gaps, ix.gaps)
     known = report.read_gaps(args.gaps)
-    text = report.report(b, src, ix, known)
+    text = report.report(b, src, ix, known, built)
     if args.report:
         with open(args.report, 'w') as f:
             f.write(text)
-    print(report.summary(b, src, ix, known))
+    print(report.summary(b, src, ix, known, built))
+    print(f'wrote      {args.output}')
 
     return 0
 

@@ -14,8 +14,10 @@ that both implementations must agree on. Change one, change the other.
     ( ) [ ] { } < > " ' ` : * . ! ? | from both ends. Tokens left empty go.
 4.  Numbers are written in decimal: `12`, `&C`, `0xC`, `0Ch` (a digit
     first, so `ah` stays a word) and MOS 3's `16_C` (a base 2-36, then
-    digits in it). After a word in cfg.hex_after (rst), bare digits are hex:
-    `rst 10` is `rst 16`. A number above 0xFFFFFF stays as it was written.
+    digits in it). After a word in cfg.hex_after (rst), bare digits are hex,
+    and the number is written in hex, lower case: `rst 10h`, `rst &10` and
+    `rst 10` are all `rst 10`, so normalising a key gives the key back. A
+    number above 0xFFFFFF stays as it was written.
 5.  A query that starts with a number is a VDU sequence: `vdu` goes first.
 6.  Skips: where the tokens start with a skip's prefix (the longest such),
     each of the skip's units after it becomes `_`, whatever was written
@@ -32,6 +34,7 @@ from dataclasses import dataclass, field
 STRIP = '()[]{}<>"\'`:*.!?|'
 SEPARATORS = ' \t,'
 MAX_NUMBER = 0xFFFFFF
+_ASCII_LOWER = {c: c + 32 for c in range(65, 91)}
 
 
 @dataclass
@@ -59,7 +62,7 @@ def tokens(text):
             # `n ;` -- a semicolon after a space still marks the number.
             out[-1] = (out[-1][0], True)
 
-    for ch in text.lower():
+    for ch in text.translate(_ASCII_LOWER):
         if ch in SEPARATORS:
             end(False)
         elif ch == ';':
@@ -126,7 +129,7 @@ def normalize_tokens(text, cfg):
         if v is None:
             out.append((tok, False, wide))
         else:
-            out.append((str(v), True, wide))
+            out.append((format(v, 'x') if hex_context else str(v), True, wide))
 
     if out and out[0][1]:
         out.insert(0, ('vdu', False, False))
