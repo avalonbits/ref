@@ -4,8 +4,11 @@
 # which must be byte for byte what the PC build writes from the same pages
 # -- and ref, run in ref-doc, lists it and finds topics in it. Then all of
 # agon-docs, 637 KB of Markdown in one folder: md2ref reads a page through
-# a fixed window and holds only the outline, so it has to fit the Agon. Then agon-docs' top-level pages, 105 KB
-# of Markdown: what md2ref holds at once has to fit the Agon's memory.
+# a fixed window and holds only the outline, so it has to fit the Agon.
+# Then, on an emulator that counts cycles (fab-agon-emulator 2037657, or
+# CYCLES_EMU), agon-docs again with make agon-md2ref-cycles, to report how
+# long the Agon takes: the emulator runs flat out, so MOS's clock, and the
+# "Done in" line md2ref prints from it, say nothing of the Agon's time.
 set -uo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SCRATCH=$(mktemp -d)
@@ -30,7 +33,7 @@ if [ ! -x "$EMU/agon-cli-emulator" ]; then
 
     exit 0
 fi
-make -s -C "$ROOT" host agon agon-md2ref > /dev/null 2>&1 || { echo "FAIL  build"; exit 1; }
+make -s -C "$ROOT" host agon agon-md2ref agon-md2ref-cycles > /dev/null 2>&1 || { echo "FAIL  build"; exit 1; }
 "$ROOT/out/host/md2ref" -o "$SCRATCH/pc.dat" "$DOC" > /dev/null || { echo "FAIL  md2ref on the PC"; exit 1; }
 
 sd=$(emu_card)
@@ -55,6 +58,8 @@ console=$(emu_run "$sd" 900)
 
 check "md2ref myprog on the Agon: reports what it wrote" \
       "$(grep -c '^md2ref: ref-doc/myprog.dat: 2 pages, 6 topics' <<< "$console")" 1
+check "  and then how long it took, worded as zap and acc word it" \
+      "$(grep -A1 '^md2ref: ref-doc/myprog.dat' <<< "$console" | grep -cE '^Done in [0-9]+\.[0-9]{2} seconds$')" 1
 check "md2ref on the Agon: the document, byte for byte as on the PC" \
       "$(md5sum < "$sd/proj/ref-doc/myprog.dat" 2>/dev/null)" "$(md5sum < "$SCRATCH/pc.dat")"
 check "ref, in ref-doc, lists the new document" \
@@ -72,6 +77,29 @@ if [ -n "$BIG" ]; then
           "$(md5sum < "$sd/big.dat" 2>/dev/null)" "$(md5sum < "$SCRATCH/big.dat")"
 else
     echo "SKIP  md2ref on the Agon: all of agon-docs: no build/cache (make dat)"
+fi
+
+# The time: the cycles from port 0x40's write to 0x41's, which the
+# emulator prints on the host, over the eZ80's 18.432 MHz.
+CYCLES_EMU=${CYCLES_EMU:-$HOME/fab-agon-emulator-2037657}
+if [ -z "$BIG" ]; then
+    echo "SKIP  md2ref's time on the Agon: no build/cache (make dat)"
+elif [ ! -x "$CYCLES_EMU/agon-cli-emulator" ]; then
+    echo "SKIP  md2ref's time on the Agon: no emulator that counts at $CYCLES_EMU"
+else
+    sd=$(emu_card)
+    cp "$ROOT/bin/md2ref-cycles/md2ref.bin" "$sd/bin/"
+    mkdir -p "$sd/big"
+    cp "$SCRATCH"/big/*.md "$sd/big/"
+    printf '%s\r\n' 'md2ref -w -o /big.dat /big' > "$sd/autoexec.txt"
+    timed=$(EMU=$CYCLES_EMU emu_run "$sd" 900)
+    cycles=$(sed -n 's/.*Debug OUT(0x41): \([0-9]*\) CPU cycles.*/\1/p' <<< "$timed" | head -1)
+    check "md2ref on the Agon: the emulator counts its cycles" \
+          "$([ "${cycles:-0}" -gt 0 ] && echo counted)" counted
+    check "  and the counting build writes the same document" \
+          "$(md5sum < "$sd/big.dat" 2>/dev/null)" "$(md5sum < "$SCRATCH/big.dat")"
+    [ -n "$cycles" ] && printf 'TIME  all of agon-docs: %d cycles, %d.%02d s at 18.432 MHz\n' \
+        "$cycles" $((cycles / 18432000)) $((cycles % 18432000 * 100 / 18432000))
 fi
 [ -n "${KEEP:-}" ] && cp "$sd/proj/ref-doc/myprog.dat" "$SCRATCH/pc.dat" "$KEEP/"
 [ $status = 0 ] || printf '%s\n' "$console" | tail -30

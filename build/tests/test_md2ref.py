@@ -193,8 +193,12 @@ class Md2ref(unittest.TestCase):
             proj = os.path.join(d, 'proj')
             p = subprocess.run([MD2REF, 'myprog'], capture_output=True, text=True, cwd=proj)
             self.assertEqual(p.returncode, 0, p.stdout)
-            self.assertEqual(p.stdout,
-                             'md2ref: ref-doc/myprog.dat: 2 pages, 6 topics, 14 keys, 43 words\n')
+            # Then the time, worded as zap and acc word it; a page this small
+            # takes well under a second, which a clock read in the wrong
+            # units would not.
+            self.assertRegex(p.stdout,
+                             r'^md2ref: ref-doc/myprog\.dat: 2 pages, 6 topics, 14 keys, 43 words\n'
+                             r'Done in 0\.\d\d seconds\n$')
             with open(os.path.join(proj, 'ref-doc', 'myprog.dat'), 'rb') as f:
                 self.assertEqual(f.read(), compile_doc('doc'))
 

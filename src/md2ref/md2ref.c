@@ -25,6 +25,23 @@
 #include <string.h>
 
 #include "md2ref.h"
+#include "timing.h"
+
+#if defined(AGONDEV) && defined(MD2REF_CYCLES)
+#include <ez80f92.h>
+/* The emulator's cycle count, for make agon-md2ref-cycles: from
+ * fab-agon-emulator 2037657 on, a write to IO port 0x40 starts it and one
+ * to 0x41 prints it on the host, exactly, as acc's bench does. The seconds
+ * MOS reports come from a clock another thread of the emulator keeps, and
+ * mean nothing when it runs flat out; the count is of the instructions the
+ * eZ80 runs. Only in this build: on a real Agon the ports are not the
+ * emulator's. */
+#define cycles_start()  (IO(0x40) = 0)
+#define cycles_report() (IO(0x41) = 0)
+#else
+#define cycles_start()
+#define cycles_report()
+#endif
 
 #ifdef ZMALLOC
 #include "zmalloc.h"
@@ -415,6 +432,8 @@ int main(int argc, char** argv)
     const char* out = NULL;
     const char* title = NULL;
     const char* error_file = NULL;
+    clock_t begin;
+    unsigned cs;
     int ninputs = 0;
     int i;
     int ok;
@@ -485,6 +504,10 @@ int main(int argc, char** argv)
         }
     }
 
+    /* Timed as zap and acc time it, down to the wording: from after the
+     * arguments are checked to after the document is written. */
+    begin = clock();
+    cycles_start();
     ok = read_pages(ninputs, inputs) == 0 && scratch_open(out) == 0;
     for (i = 0; ok && i < npages; i++) {
         STEP("pages");
@@ -495,6 +518,8 @@ int main(int argc, char** argv)
          && resolve_pending() == 0 && STEP("index") && (make_keys(), 1)
          && STEP("write") && write_book(out) == 0;
     scratch_close();
+    cycles_report();
+    cs = elapsed_cs(begin, clock());
     if (ok) {
         printf("md2ref: %s: %d pages, %d topics, %u keys, %u words\n", out, npages, ntopics,
                keys_section.count, words_section.count);
@@ -507,6 +532,9 @@ int main(int argc, char** argv)
 #ifdef ZMALLOC
     z_report();             /* the heap's peak: make agon-md2ref-heap */
 #endif
+    if (ok) {
+        printf("Done in %u.%02u seconds\n", cs / 100, cs % 100);
+    }
 
     return ok ? 0 : FAILED;
 }

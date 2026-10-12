@@ -7,6 +7,9 @@
 #   make agon-md2ref bin/md2ref/md2ref.bin, md2ref for the Agon (md2ref.mk)
 #   make agon-md2ref-heap
 #                    bin/md2ref-heap/md2ref.bin, with the zmalloc shim
+#   make agon-md2ref-cycles
+#                    bin/md2ref-cycles/md2ref.bin, which has the emulator
+#                    count its cycles (IO ports 0x40 and 0x41): for timing
 #   make acc-core    the reader core compiled by acc, which must keep working
 #   make agon        bin/ref.bin, by agondev (agon.mk)
 #   make agon-script bin/script/ref.bin: keys from /ref.keys, a transcript
@@ -38,7 +41,7 @@ AGON_MAKE = PATH=$(AGONDEV)/bin:$$PATH $(MAKE) -f agon.mk $(REF_OBJS)
 MD2REF_MAKE = PATH=$(AGONDEV)/bin:$$PATH $(MAKE) -f md2ref.mk $(MD2REF_OBJS)
 
 .PHONY: all dat host acc-core test frames agon agon-script agon-heap agon-md2ref \
-	agon-md2ref-heap emu
+	agon-md2ref-heap agon-md2ref-cycles emu
 
 ZMALLOC_FLAGS = -DZMALLOC -Dmalloc=z_malloc -Dcalloc=z_calloc -Drealloc=z_realloc -Dfree=z_free
 
@@ -97,6 +100,11 @@ agon-md2ref-heap:
 	@mkdir -p bin/md2ref-heap obj/md2ref-heap
 	$(MD2REF_MAKE) OBJDIR=obj/md2ref-heap BINDIR=bin/md2ref-heap ZMALLOC=1 \
 		EXTRA_CFLAGS='$(ZMALLOC_FLAGS)'
+
+agon-md2ref-cycles:
+	@mkdir -p bin/md2ref-cycles obj/md2ref-cycles
+	$(MD2REF_MAKE) OBJDIR=obj/md2ref-cycles BINDIR=bin/md2ref-cycles \
+		EXTRA_CFLAGS=-DMD2REF_CYCLES
 
 agon-heap:
 	@mkdir -p bin/heap obj/heap

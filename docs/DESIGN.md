@@ -269,6 +269,13 @@ All of agon-docs, 637 KB of Markdown and 721 topics, peaks at about
 a document is its outline: its topics, their titles and anchors, and its
 keys.
 
+It ends with "Done in N.NN seconds", worded as zap and acc word it, from
+MOS's clock. Under an emulator running flat out that clock means nothing,
+so `make agon-md2ref-cycles` builds one that has the emulator count its
+cycles instead (IO ports 0x40 and 0x41, fab-agon-emulator 2037657 on), as
+acc's bench does. All of agon-docs takes 4.6 billion cycles: about 251
+seconds at the Agon's 18.432 MHz. `test/md2ref.sh` reports the figure.
+
 **Not the builder.** md2ref has no rules file: no hand-made keys, no link
 fixes, no gaps report, no shared dictionary. Its keys are what headings
 say. The builder stays the way agon-docs is made.
