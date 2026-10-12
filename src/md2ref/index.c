@@ -51,6 +51,7 @@ static ref_file settings;           /* only what ref_normalize reads */
 static uint8_t word_char[256];
 static uint8_t word_kind[256];      /* NOT_DIGIT | REAL, for a byte in a word */
 static uint8_t word_as_is[256];     /* in a word as it is: a-z, 0-9, _ and $ */
+static uint8_t half_of[256];        /* n / 2, as a byte: a shift of an int is a call */
 /* The stop words packed, each its length and its letters, those of a
  * first letter together from stop_off[c - 'a']; and for each first
  * letter, a bit for each length one of them has. */
@@ -66,6 +67,7 @@ static void make_tables(void)
     unsigned n = 0;
 
     for (c = 0; c < 256; c++) {
+        half_of[c] = (uint8_t)(c / 2);
         if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '$') {
             word_char[c] = (uint8_t)c;
         } else if (c >= 'A' && c <= 'Z') {
@@ -629,6 +631,7 @@ typedef union {
 } dslot_t;
 
 static dslot_t* dslot;
+static dslot_t* dslot_end;
 static uint8_t dslot_hmask;         /* the offset's high byte's mask, on the Agon */
 static unsigned ndslots;
 static uint8_t* dtext;              /* the chunk being filled, and what is left of it */
@@ -644,11 +647,12 @@ static unsigned dtext_chunks_cap;
  * 8-bit lookups, not the whole word through md_hash: a word that shares
  * them all with another is told apart by the comparison after. */
 #define ALWAYS_INLINE static inline __attribute__((always_inline))
+#define COLD static __attribute__((noinline))  /* off word_seen's common path (zap's guide, 2a) */
 
 ALWAYS_INLINE unsigned word_hash(const uint8_t* w, uint8_t len)
 {
     const uint8_t* t = md_pearson;
-    const uint8_t* mid = w + (len >> 1);
+    const uint8_t* mid = w + half_of[len];
     const uint8_t* last = w + len - 1;
     uint8_t a = t[len];                 /* bytes throughout: an int's and is a call */
     uint8_t b = t[(uint8_t)(len + 1)];
@@ -732,11 +736,12 @@ static void text_word(const char* word, int len, int topic, int in_title)
 ALWAYS_INLINE dslot_t* dict_find_h(const uint8_t* w, uint8_t len, unsigned h)
 {
     dslot_t* sp;
-    dslot_t* end = dslot + ndslots;
+    dslot_t* end = dslot_end;
     dword* d;
 
 #if defined(AGONDEV)
-    union {
+    /* volatile, or the compiler joins the bytes back with a shift */
+    static volatile union {
         unsigned v;
         uint8_t b[3];
     } off;
@@ -764,7 +769,7 @@ static dslot_t* dict_find(const uint8_t* w, uint8_t len)
 
 /* The table twice as big, made again from the words: the old freed first,
  * so it never holds both. 0, or -1 if there is not the room for it. */
-static int dict_slots(void)
+COLD int dict_slots(void)
 {
     unsigned want = ndslots ? ndslots * 2 : 512;
     unsigned k;
@@ -777,6 +782,7 @@ static int dict_slots(void)
     ndslots = want;
     dslot_hmask = (uint8_t)((want * 4 >> 8) - 1);   /* 4-byte slots: at least 64 of them */
     dslot = md_realloc(NULL, ndslots * (unsigned)sizeof(dslot_t));
+    dslot_end = dslot + ndslots;
     memset(dslot, 0, ndslots * sizeof(dslot_t));
     for (k = 0; k < ndict; k++) {
         dict_find(DW(k).s, DW(k).len)->p = &DW(k);
@@ -787,7 +793,7 @@ static int dict_slots(void)
 
 /* A new word into the dictionary, in the slot sp: it, or NULL if there is
  * no room for it. */
-static dword* dict_add(const uint8_t* w, unsigned len, dslot_t* sp)
+COLD dword* dict_add(const uint8_t* w, unsigned len, dslot_t* sp)
 {
     unsigned k = ndict;
     unsigned more = len + (k % DICT_BLOCK ? 0 : DICT_BLOCK * (unsigned)sizeof(dword))
@@ -827,7 +833,7 @@ static dword* dict_add(const uint8_t* w, unsigned len, dslot_t* sp)
 
 /* The dictionary begun with the stop words, so that a word's one look in
  * it says if it is one. 0, or -1. */
-static int dict_begin(void)
+COLD int dict_begin(void)
 {
     int k;
 
@@ -855,16 +861,16 @@ static int dict_begin(void)
 /* A word of the topic: nothing if it is a stop word; a posting, if it is
  * the dictionary's -- or comes into it -- and the topic has not used it
  * yet; else as the word. */
-static void word_seen(const uint8_t* w, unsigned len, int in_title)
+static void word_seen(const uint8_t* w, uint8_t len, int in_title)
 {
-    unsigned h = word_hash(w, (uint8_t)len);
+    unsigned h = word_hash(w, len);
     dword* d = NULL;
 
     if (!dslot && !dict_full && dict_begin() != 0) {
         dict_full = 1;
     }
     if (dslot) {
-        dslot_t* sp = dict_find_h(w, (uint8_t)len, h);
+        dslot_t* sp = dict_find_h(w, len, h);
 
         d = sp->p;
         if (!d && !dict_full) {
@@ -872,7 +878,7 @@ static void word_seen(const uint8_t* w, unsigned len, int in_title)
                 if (dict_slots() != 0) {
                     dict_full = 1;
                 } else {
-                    sp = dict_find_h(w, (uint8_t)len, h);  /* the table is new */
+                    sp = dict_find_h(w, len, h);  /* the table is new */
                 }
             }
             if (!dict_full && (d = dict_add(w, len, sp)) == NULL) {
@@ -943,7 +949,7 @@ void words_begin(int t)
 static void title_text_word(const char* w, int len, int topic, int in_title)
 {
     (void)topic;
-    word_seen((const uint8_t*)w, (unsigned)len, in_title);
+    word_seen((const uint8_t*)w, (uint8_t)len, in_title);
 }
 
 void words_text(const char* plain, int in_title)
@@ -1020,7 +1026,7 @@ void words_markup(const uint8_t* m, unsigned n)
                         len = WORD_MAX;
                     }
                     if (len >= 3 && real_word(start, len)) {
-                        word_seen(start, len, 0);
+                        word_seen(start, (uint8_t)len, 0);
                     }
                     continue;
                 }
@@ -1045,7 +1051,7 @@ void words_markup(const uint8_t* m, unsigned n)
             }
             len = (unsigned)(o - w);
             if (len >= 3 && real_word(w, len)) {
-                word_seen(w, len, 0);       /* a stop word is found as one there */
+                word_seen(w, (uint8_t)len, 0);  /* a stop word is found as one there */
             }
         }
 next_block:

@@ -82,7 +82,7 @@ fi
 # The time: the cycles from port 0x40's write to 0x41's, which the
 # emulator prints on the host, over the eZ80's 18.432 MHz.
 CYCLES_EMU=${CYCLES_EMU:-$HOME/fab-agon-emulator-2037657}
-BUDGET=1680
+BUDGET=1620
 if [ -z "$BIG" ]; then
     echo "SKIP  md2ref's time on the Agon: no build/cache (make dat)"
 elif [ ! -x "$CYCLES_EMU/agon-cli-emulator" ]; then
