@@ -55,13 +55,18 @@ frames:
 test: host acc-core frames
 	cd build && $(PYTHON) -m unittest discover -s tests -t .
 
+# agondev's makefile makes $(BINDIR) with a plain mkdir, which fails for
+# bin/script in a fresh checkout with no bin: so each is made here first.
 agon:
+	@mkdir -p bin obj
 	$(AGON_MAKE)
 
 agon-script:
+	@mkdir -p bin/script obj/script
 	$(AGON_MAKE) OBJDIR=obj/script BINDIR=bin/script EXTRA_CFLAGS=-DREF_SCRIPT
 
 agon-heap:
+	@mkdir -p bin/heap obj/heap
 	$(AGON_MAKE) OBJDIR=obj/heap BINDIR=bin/heap \
 		EXTRA_CFLAGS='-DREF_SCRIPT -DZMALLOC -Dmalloc=z_malloc -Dcalloc=z_calloc -Drealloc=z_realloc -Dfree=z_free'
 
