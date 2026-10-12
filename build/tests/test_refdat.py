@@ -128,6 +128,25 @@ class File(unittest.TestCase):
         self.assertIn(b'In this section:', text)
         self.assertIn(b'Usage from Z80 assembler', text)
 
+    def test_the_same_every_time(self):
+        # Two builds, under different hash seeds, write the same bytes.
+        import os
+        import subprocess
+        import tempfile
+        from .agon_docs import HERE
+        _, d = docs()
+        outs = []
+        for seed in ('1', '2'):
+            fd, path = tempfile.mkstemp(suffix='.dat')
+            os.close(fd)
+            env = dict(os.environ, PYTHONHASHSEED=seed)
+            subprocess.run(['python3', '-m', 'refbuild', '--docs', d, '-o', path],
+                           cwd=HERE, env=env, check=True, capture_output=True)
+            with open(path, 'rb') as f:
+                outs.append(f.read())
+            os.unlink(path)
+        self.assertEqual(outs[0], outs[1])
+
     def test_size(self):
         _, out = built()
         self.assertLess(len(out.data), 520 * 1024)

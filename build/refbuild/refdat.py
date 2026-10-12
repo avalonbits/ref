@@ -104,7 +104,9 @@ def train_dictionary(texts, size=DICT_SIZE, shingle=12, step=3):
         cnt.update({t[i:i + shingle] for i in range(0, max(len(t) - shingle, 0), step)})
     picks = []
     have = bytearray()
-    for s, c in cnt.most_common():
+    # Ties broken by the bytes themselves: a set's order follows Python's
+    # hash seed, which changes every run, and ref.dat must not.
+    for s, c in sorted(cnt.items(), key=lambda kv: (-kv[1], kv[0])):
         if c < 3 or len(have) >= size:
             break
         if s in have:
