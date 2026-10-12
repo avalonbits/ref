@@ -98,7 +98,7 @@ else
           "$([ "${cycles:-0}" -gt 0 ] && echo counted)" counted
     check "  and the counting build writes the same document" \
           "$(md5sum < "$sd/big.dat" 2>/dev/null)" "$(md5sum < "$SCRATCH/big.dat")"
-    [ -n "$cycles" ] && printf 'TIME  all of agon-docs: %d cycles, %d.%02d s at 18.432 MHz\n' \
+    [ -n "$cycles" ] && printf 'TIME  all of agon-docs: %d cycles, %d.%02d s at 18.432 MHz, SD card reads not counted\n' \
         "$cycles" $((cycles / 18432000)) $((cycles % 18432000 * 100 / 18432000))
 fi
 [ -n "${KEEP:-}" ] && cp "$sd/proj/ref-doc/myprog.dat" "$SCRATCH/pc.dat" "$KEEP/"
