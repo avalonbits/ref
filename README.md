@@ -173,3 +173,10 @@ in [`build/rules.toml`](build/rules.toml), no longer turn into a key.
 ref.bin only needs rebuilding if the file format changes.
 
 [docs/DESIGN.md](docs/DESIGN.md) explains how ref works.
+
+## License
+
+ref, md2ref and the builder are free software, under the GNU General
+Public License, version 3 only (GPL-3.0-only): see [LICENSE](LICENSE). A
+document is its source's: mos.dat is agon-docs' text, under agon-docs'
+terms, and what md2ref makes from your Markdown is yours.
