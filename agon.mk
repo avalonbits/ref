@@ -19,4 +19,8 @@ include $(shell agondev-config --makefile)
 # answers differently from the PC build. See BRIEFING.md.
 AGONDEV_FIX = -mllvm -twoaddr-reschedule=false
 CFLAGS += -Isrc/core -Wall $(AGONDEV_FIX) $(EXTRA_CFLAGS) -MMD -MP
+
+# ref is the reader core and the viewer: not every .c under src, which is
+# what makefile.inc would take (src/md2ref is md2ref.mk's).
+OBJS := $(patsubst $(SRCDIR)/%.c,$(OBJDIR)/%.o,$(wildcard src/core/*.c src/viewer/*.c))
 -include $(shell find $(OBJDIR) -name '*.d' 2>/dev/null)

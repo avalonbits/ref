@@ -354,16 +354,20 @@ if [ -f "$HUB/build/hub.bin" ] && [ -f "$HUB/build/lib/agondev/libhub.a" ]; then
     sd=$(emu_card "$SCRIPTED")
     cp "$HUB/build/hub.bin" "$sd/mos/"
     cp "$ROOT/test/agon/hubf1/bin/hubf1.bin" "$HUB/build/test/fail.bin" "$sd/bin/"
-    printf 'esc\n' > "$sd/ref.keys"
-    printf 'Set Hub$NoPause 1\r\nhubf1 -c fail\r\nhubf1 vdu 23 27 3\r\nhubf1 xyzzy\r\n' > "$sd/script.txt"
+    printf 'esc\nesc\n' > "$sd/ref.keys"
+    printf 'Set Hub$NoPause 1\r\nhubf1 -c fail\r\nhubf1 vdu 23 27 3\r\nhubf1 xyzzy\r\nhubf1 vdu 23,27,3\r\n' \
+        > "$sd/script.txt"
     printf 'hub -f /script.txt\r\n' > "$sd/autoexec.txt"
     out=$(emu_run "$sd" 120)
     t=$(tr -d '\r' < "$sd/ref.out")
     rm -rf "$sd"
     results=$(grep -a '^f1 back' <<< "$out" | grep -oE 'result [0-9]+' | tr '\n' ',')
     check "under hub: the control fails 19, ref shows a topic 0, and finds nothing 100" \
-          "$results" "result 19,result 0,result 100,"
-    check "  ref ran as the user program, on vdu 23 27 3" "$(grep -c '^view topic 502 ' <<< "$t")" 1
+          "$results" "result 19,result 0,result 100,result 0,"
+    check "  ref ran as the user program, on vdu 23 27 3" "$(grep -c '^view topic 502 ' <<< "$t")" 2
+    check "  every word of the query reaches ref, spaces or commas" \
+          "$(grep -a '^args ' <<< "$t" | grep -v xyzzy | tr '\n' ',')" \
+          "args 'vdu 23 27 3' normalised 'vdu 23 27 3',args 'vdu 23,27,3' normalised 'vdu 23 27 3',"
 else
     echo "SKIP  hub: no hub build at $HUB"
 fi
