@@ -376,6 +376,23 @@ class Md2ref(unittest.TestCase):
         self.assertEqual(ask(data, 'search', ['w0z', 'w7z', 'w199z']).splitlines(),
                          ['1 0:0:1', '1 0:1:1', '1 0:0:1'])
 
+    def test_text_is_compressed(self):
+        # Ten words in an order that never repeats for long: LZ4 finds the
+        # words again, through its hash of every four bytes. The whole
+        # document, its index too, comes to about half the page; with a
+        # hash that told nothing apart it was larger than the page.
+        names = ['alpha', 'bravo', 'charlie', 'delta', 'echo', 'foxtrot', 'golf', 'hotel',
+                 'india', 'juliet']
+        v, said = 1, []
+        for _ in range(1800):
+            v = (v * 1103515245 + 12345) % 2 ** 31
+            said.append(names[v >> 16 & 7 if v & 1 else (v >> 8) % 10])
+        page = '# Doc\n\n' + '\n\n'.join(' '.join(said[k:k + 12])
+                                           for k in range(0, len(said), 12)) + '\n'
+        p, data, left = compile_pages({'index.md': page})
+        self.assertEqual(p.returncode, 0, p.stdout)
+        self.assertLess(len(data), len(page) * 3 // 4)
+
     def test_words_past_one_run(self):
         # More words than one 16 KB run of the words file holds: sorted in
         # runs, merged, every word still finds its topic.

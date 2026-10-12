@@ -16,14 +16,36 @@
 
 static uint16_t head[1 << HASH_BITS];      /* positions + 1; 0 for none */
 
-/* Shifted while still 32 bits: unsigned is 24 bits on the eZ80, and the
- * top byte is the part kept. */
+/* The hash of four bytes, from a table of random bytes for each byte and
+ * each half of the result: 8-bit lookups and exclusive ors, which the eZ80
+ * does in line, where the multiply and the 32-bit shifts of the usual
+ * hash are calls -- and this runs at every byte of every topic. */
+static uint8_t mix_lo[4][256];
+static uint8_t mix_hi[4][256];
+static int mixed;
+
+static void make_mix(void)
+{
+    uint32_t v = 1;
+    unsigned k;
+    unsigned b;
+
+    for (k = 0; k < 4; k++) {
+        for (b = 0; b < 256; b++) {
+            v = v * 1103515245UL + 12345;
+            mix_lo[k][b] = (uint8_t)(v >> 16);
+            v = v * 1103515245UL + 12345;
+            mix_hi[k][b] = (uint8_t)(v >> 16 & ((1 << (HASH_BITS - 8)) - 1));
+        }
+    }
+}
+
 static unsigned hash(const uint8_t* p)
 {
-    uint32_t v = (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16
-                 | (uint32_t)p[3] << 24;
+    uint8_t lo = mix_lo[0][p[0]] ^ mix_lo[1][p[1]] ^ mix_lo[2][p[2]] ^ mix_lo[3][p[3]];
+    uint8_t hi = mix_hi[0][p[0]] ^ mix_hi[1][p[1]] ^ mix_hi[2][p[2]] ^ mix_hi[3][p[3]];
 
-    return (unsigned)(((v * 2654435761UL) & 0xFFFFFFFFUL) >> (32 - HASH_BITS));
+    return (unsigned)hi << 8 | lo;
 }
 
 static unsigned length_bytes(uint8_t* o, unsigned n)
@@ -107,6 +129,10 @@ unsigned lz4_compress(const uint8_t* src, unsigned n, uint8_t* dst, unsigned roo
     int f = 0;                  /* the first placeholder not yet placed */
 
     (void)room;                 /* the caller gives n + n / 255 + 16 */
+    if (!mixed) {
+        make_mix();
+        mixed = 1;
+    }
     memset(head, 0, sizeof head);
     while (i + MIN_MATCH <= n) {
         unsigned h = hash(src + i);
