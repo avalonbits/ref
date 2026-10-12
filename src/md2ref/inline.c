@@ -156,9 +156,37 @@ static int plain_run(const char* text, int k, int n, const uint8_t* stop)
 {
     const uint8_t* s = (const uint8_t*)text + k;
     const uint8_t* e = (const uint8_t*)text + n;
-    int w = written;
-    int sp = last_space;
+    uint8_t* o;
+    uint8_t* end;
+    uint8_t sp = (uint8_t)last_space;
 
+    if ((unsigned)written + (unsigned)(n - k) > (unsigned)room) {
+        /* Past the room -- a topic too big, which is an error anyway: as
+         * put_char, a byte at a time, counting what does not fit. */
+        while (s < e && !stop[*s]) {
+            uint8_t c = *s++;
+
+            if (c == ' ') {
+                if (sp) {
+                    continue;
+                }
+                sp = 1;
+            } else {
+                sp = 0;
+            }
+            if (written < room) {
+                out[written] = c;
+            }
+            written++;
+        }
+        last_space = sp;
+
+        return (int)((const char*)s - text);
+    }
+    /* Room for all of it: through pointers, compared unsigned -- an int's
+     * < is a call to fix its flags, on every byte. */
+    o = out + written;
+    end = o;
     while (s < e && !stop[*s]) {
         uint8_t c = *s++;
 
@@ -170,12 +198,9 @@ static int plain_run(const char* text, int k, int n, const uint8_t* stop)
         } else {
             sp = 0;
         }
-        if (w < room) {
-            out[w] = c;
-        }
-        w++;
+        *end++ = c;
     }
-    written = w;
+    written += (int)(end - o);
     last_space = sp;
 
     return (int)((const char*)s - text);

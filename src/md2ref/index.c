@@ -50,6 +50,7 @@ static ref_file settings;           /* only what ref_normalize reads */
 
 static uint8_t word_char[256];
 static uint8_t word_kind[256];      /* NOT_DIGIT | REAL, for a byte in a word */
+static uint8_t word_as_is[256];     /* in a word as it is: a-z, 0-9, _ and $ */
 /* The stop words packed, each its length and its letters, those of a
  * first letter together from stop_off[c - 'a']; and for each first
  * letter, a bit for each length one of them has. */
@@ -70,6 +71,7 @@ static void make_tables(void)
         } else if (c >= 'A' && c <= 'Z') {
             word_char[c] = (uint8_t)(c + 32);
         }
+        word_as_is[c] = (uint8_t)(c && word_char[c] == c);
         word_kind[c] = (uint8_t)((c >= '0' && c <= '9' ? 0 : NOT_DIGIT)
                                  | (c != '_' && c != '$' ? REAL : 0));
     }
@@ -590,6 +592,8 @@ static unsigned nslots;             /* a power of two, at least twice the words 
 static unsigned slot_cap;
 static unsigned nwords;
 static unsigned word_topic;
+static uint8_t topic_lo;            /* word_topic as bytes, for postings */
+static uint8_t topic_hi;
 
 #define FIRST_SLOTS 64
 
@@ -604,7 +608,9 @@ typedef struct {
     uint8_t* s;             /* its letters */
     uint16_t last;          /* the last topic, as made, + 1, while reading; then its rank */
     uint16_t count;         /* its postings */
-    uint16_t id;            /* its number */
+    uint16_t id;            /* its number, and as bytes */
+    uint8_t id_lo;
+    uint8_t id_hi;
     uint8_t len;
     uint8_t stop;           /* a stop word: in the dictionary only to be found as one */
 } dword;
@@ -613,8 +619,17 @@ static dword* dict_block[DICT_MAX / DICT_BLOCK];
 static unsigned ndict;
 static unsigned dict_bytes;
 static int dict_full;
-static dword** dslot;               /* the words, by hash: probed by pointer, which is
-                                     * no multiply or shift on the eZ80 */
+/* The words, by hash: probed by pointer, which is no multiply or shift
+ * on the eZ80. A slot is four bytes there, and the hash's two bytes make
+ * its offset byte by byte -- a subscript of three-byte pointers is a call
+ * to multiply (zap's guide). */
+typedef union {
+    dword* p;
+    uint8_t pad[4];
+} dslot_t;
+
+static dslot_t* dslot;
+static uint8_t dslot_hmask;         /* the offset's high byte's mask, on the Agon */
 static unsigned ndslots;
 static uint8_t* dtext;              /* the chunk being filled, and what is left of it */
 static unsigned dtext_left;
@@ -628,7 +643,9 @@ static unsigned dtext_chunks_cap;
  * length, its first two letters, its middle one and its last -- each two
  * 8-bit lookups, not the whole word through md_hash: a word that shares
  * them all with another is told apart by the comparison after. */
-static unsigned word_hash(const uint8_t* w, uint8_t len)
+#define ALWAYS_INLINE static inline __attribute__((always_inline))
+
+ALWAYS_INLINE unsigned word_hash(const uint8_t* w, uint8_t len)
 {
     const uint8_t* t = md_pearson;
     const uint8_t* mid = w + (len >> 1);
@@ -710,32 +727,28 @@ static void text_word(const char* word, int len, int topic, int in_title)
     }
 }
 
-/* The dictionary's hash of a word: Pearson's, two lanes, of every letter
- * -- as words_markup makes it while it reads the word. */
-static unsigned dict_hash(const uint8_t* w, unsigned len)
-{
-    const uint8_t* t = md_pearson;
-    const uint8_t* e = w + len;
-    uint8_t a = 0;
-    uint8_t b = 1;
-
-    while (w < e) {
-        a = t[a ^ *w];
-        b = t[b ^ *w++];
-    }
-
-    return (unsigned)b << 8 | a;
-}
-
 /* The slot for w, of hash h: the one it is in, or the empty one it would
  * go in. */
-static dword** dict_find_h(const uint8_t* w, uint8_t len, unsigned h)
+ALWAYS_INLINE dslot_t* dict_find_h(const uint8_t* w, uint8_t len, unsigned h)
 {
-    dword** sp = dslot + (h & (ndslots - 1));
-    dword** end = dslot + ndslots;
+    dslot_t* sp;
+    dslot_t* end = dslot + ndslots;
     dword* d;
 
-    while ((d = *sp) != NULL && (d->len != len || memcmp(d->s, w, len) != 0)) {
+#if defined(AGONDEV)
+    union {
+        unsigned v;
+        uint8_t b[3];
+    } off;
+
+    off.b[0] = (uint8_t)h & 0xFC;
+    off.b[1] = (uint8_t)(h >> 8) & dslot_hmask;
+    off.b[2] = 0;
+    sp = (dslot_t*)((uint8_t*)dslot + off.v);
+#else
+    sp = dslot + (h & (ndslots - 1));
+#endif
+    while ((d = sp->p) != NULL && (d->len != len || memcmp(d->s, w, len) != 0)) {
         if (++sp == end) {
             sp = dslot;
         }
@@ -744,9 +757,9 @@ static dword** dict_find_h(const uint8_t* w, uint8_t len, unsigned h)
     return sp;
 }
 
-static dword** dict_find(const uint8_t* w, uint8_t len)
+static dslot_t* dict_find(const uint8_t* w, uint8_t len)
 {
-    return dict_find_h(w, len, dict_hash(w, len));
+    return dict_find_h(w, len, word_hash(w, len));
 }
 
 /* The table twice as big, made again from the words: the old freed first,
@@ -756,16 +769,17 @@ static int dict_slots(void)
     unsigned want = ndslots ? ndslots * 2 : 512;
     unsigned k;
 
-    if (dict_bytes + (want - ndslots) * (unsigned)sizeof(dword*) > DICT_BYTES || want > 0x10000) {
+    if (dict_bytes + (want - ndslots) * (unsigned)sizeof(dslot_t) > DICT_BYTES || want > 0x10000) {
         return -1;
     }
-    dict_bytes += (want - ndslots) * (unsigned)sizeof(dword*);
+    dict_bytes += (want - ndslots) * (unsigned)sizeof(dslot_t);
     free(dslot);
     ndslots = want;
-    dslot = md_realloc(NULL, ndslots * (unsigned)sizeof(dword*));
-    memset(dslot, 0, ndslots * sizeof(dword*));
+    dslot_hmask = (uint8_t)((want * 4 >> 8) - 1);   /* 4-byte slots: at least 64 of them */
+    dslot = md_realloc(NULL, ndslots * (unsigned)sizeof(dslot_t));
+    memset(dslot, 0, ndslots * sizeof(dslot_t));
     for (k = 0; k < ndict; k++) {
-        *dict_find(DW(k).s, DW(k).len) = &DW(k);
+        dict_find(DW(k).s, DW(k).len)->p = &DW(k);
     }
 
     return 0;
@@ -773,7 +787,7 @@ static int dict_slots(void)
 
 /* A new word into the dictionary, in the slot sp: it, or NULL if there is
  * no room for it. */
-static dword* dict_add(const uint8_t* w, unsigned len, dword** sp)
+static dword* dict_add(const uint8_t* w, unsigned len, dslot_t* sp)
 {
     unsigned k = ndict;
     unsigned more = len + (k % DICT_BLOCK ? 0 : DICT_BLOCK * (unsigned)sizeof(dword))
@@ -800,13 +814,15 @@ static dword* dict_add(const uint8_t* w, unsigned len, dword** sp)
     DW(k).last = 0;
     DW(k).count = 0;
     DW(k).id = (uint16_t)k;
+    DW(k).id_lo = (uint8_t)(k & 0xFF);
+    DW(k).id_hi = (uint8_t)(k >> 8);
     DW(k).stop = 0;
     dtext += len;
     dtext_left -= len;
-    *sp = &DW(k);
+    sp->p = &DW(k);
     ndict++;
 
-    return *sp;
+    return sp->p;
 }
 
 /* The dictionary begun with the stop words, so that a word's one look in
@@ -839,17 +855,18 @@ static int dict_begin(void)
 /* A word of the topic: nothing if it is a stop word; a posting, if it is
  * the dictionary's -- or comes into it -- and the topic has not used it
  * yet; else as the word. */
-static void word_seen(const uint8_t* w, unsigned len, unsigned h, int in_title)
+static void word_seen(const uint8_t* w, unsigned len, int in_title)
 {
+    unsigned h = word_hash(w, (uint8_t)len);
     dword* d = NULL;
 
     if (!dslot && !dict_full && dict_begin() != 0) {
         dict_full = 1;
     }
     if (dslot) {
-        dword** sp = dict_find_h(w, (uint8_t)len, h);
+        dslot_t* sp = dict_find_h(w, (uint8_t)len, h);
 
-        d = *sp;
+        d = sp->p;
         if (!d && !dict_full) {
             if (ndict * 2 >= ndslots) {
                 if (dict_slots() != 0) {
@@ -884,12 +901,28 @@ static void word_seen(const uint8_t* w, unsigned len, unsigned h, int in_title)
         }
         r = wbuf + wlen;
         r[0] = POSTING;
-        r[1] = (uint8_t)(d->id & 0xFF);
-        r[2] = (uint8_t)(d->id >> 8);
-        r[3] = (uint8_t)(word_topic & 0xFF);
-        r[4] = (uint8_t)(word_topic >> 8 | (unsigned)in_title << 7);
+        r[1] = d->id_lo;                /* bytes as they go, made once: no shifts here */
+        r[2] = d->id_hi;
+        r[3] = topic_lo;
+        r[4] = in_title ? topic_hi | 0x80 : topic_hi;
         wlen += 5;
     }
+}
+
+/* Not all digits, and not only _ and $: the kinds of its letters -- at
+ * once for most, a word starting with a letter being both. */
+ALWAYS_INLINE int real_word(const uint8_t* w, unsigned len)
+{
+    uint8_t kind = 0;
+
+    if (word_kind[*w] == (NOT_DIGIT | REAL)) {
+        return 1;
+    }
+    while (len--) {
+        kind |= word_kind[*w++];
+    }
+
+    return kind == (NOT_DIGIT | REAL);
 }
 
 void words_begin(int t)
@@ -899,6 +932,8 @@ void words_begin(int t)
         slot = md_realloc(NULL, slot_cap * (unsigned)sizeof(uint16_t));
     }
     word_topic = (unsigned)TOPIC(t).made;
+    topic_lo = (uint8_t)(word_topic & 0xFF);
+    topic_hi = (uint8_t)(word_topic >> 8);
     wlen = 0;
     nwords = 0;
     nslots = FIRST_SLOTS;
@@ -908,7 +943,7 @@ void words_begin(int t)
 static void title_text_word(const char* w, int len, int topic, int in_title)
 {
     (void)topic;
-    word_seen((const uint8_t*)w, (unsigned)len, dict_hash((const uint8_t*)w, (unsigned)len), in_title);
+    word_seen((const uint8_t*)w, (unsigned)len, in_title);
 }
 
 void words_text(const char* plain, int in_title)
@@ -921,6 +956,35 @@ void words_text(const char* plain, int in_title)
  * would give -- a LINK and its topic, and the other codes but a BREAK, a
  * newline and the END, are left out and what is either side joins up --
  * without making the plain text first. */
+/* The scans of words_markup, each a function of its own: so that the loop
+ * has its two values in registers, and not the whole of words_markup's
+ * around it (zap's guide: split a frame for a hot loop's sake). */
+#define NOINLINE __attribute__((noinline))
+
+/* From s, past bytes that are in a word as they are. */
+static NOINLINE const uint8_t* as_is_run(const uint8_t* s, const uint8_t* e)
+{
+    while (s < e && word_as_is[*s]) {
+        s++;
+    }
+
+    return s;
+}
+
+/* From s, past what is between words -- a LINK with its topic -- to the
+ * next word's first byte, or to its block's END, or e. */
+static NOINLINE const uint8_t* between_words(const uint8_t* s, const uint8_t* e)
+{
+    while (s < e && !word_char[*s]) {
+        if (*s == REF_END) {
+            break;
+        }
+        s += *s == REF_LINK ? 3 : 1;
+    }
+
+    return s;
+}
+
 void words_markup(const uint8_t* m, unsigned n)
 {
     static uint8_t w[WORD_MAX + 1];
@@ -932,30 +996,44 @@ void words_markup(const uint8_t* m, unsigned n)
     }
     while (s < e) {
         s += 3;                             /* the block's head */
-        for (;;) {
+        while (s < e) {
             uint8_t* o = w;
-            uint8_t kind = 0;
-            uint8_t c;
-            uint8_t ha = 0;                 /* dict_hash, as the word is read */
-            uint8_t hb = 1;
-            int len;
+            unsigned len;
 
-            while (!word_char[*s]) {
-                if (*s == REF_END || s >= e) {
-                    goto next_block;
-                }
-                s += *s == REF_LINK ? 3 : 1;
+            s = between_words(s, e);
+            if (s < e && *s == REF_END) {
+                goto next_block;
             }
-            for (;;) {
-                uint8_t b = *s;
+            /* Most words are the text as it is -- lower case, nothing
+             * inside them -- and are taken where they are, by a loop with
+             * two values to keep (bounded by e, as zap's guide says a scan
+             * must be). One with a capital, or a code inside it, is read
+             * again from its start, a letter at a time, into w. */
+            {
+                const uint8_t* start = s;
 
-                if ((c = word_char[b]) != 0) {
+                s = as_is_run(s, e);
+                if (s >= e || !(word_char[*s]           /* a capital, or a code (a LINK is one) */
+                                || (*s < 0x20 && *s != REF_END && *s != REF_BREAK && *s != '\n'))) {
+                    len = (unsigned)(s - start);
+                    if (len > WORD_MAX) {
+                        len = WORD_MAX;
+                    }
+                    if (len >= 3 && real_word(start, len)) {
+                        word_seen(start, len, 0);
+                    }
+                    continue;
+                }
+                s = start;
+            }
+            while (s < e) {
+                uint8_t b = *s;
+                uint8_t c = word_char[b];
+
+                if (c) {
                     if (o < w + WORD_MAX) {
                         *o++ = c;
-                        ha = md_pearson[ha ^ c];
-                        hb = md_pearson[hb ^ c];
                     }
-                    kind |= word_kind[b];
                     s++;
                 } else if (b == REF_LINK) {
                     s += 3;
@@ -965,9 +1043,9 @@ void words_markup(const uint8_t* m, unsigned n)
                     break;
                 }
             }
-            len = (int)(o - w);
-            if (len >= 3 && kind == (NOT_DIGIT | REAL)) {
-                word_seen(w, (unsigned)len, (unsigned)hb << 8 | ha, 0);   /* a stop word is found as one there */
+            len = (unsigned)(o - w);
+            if (len >= 3 && real_word(w, len)) {
+                word_seen(w, len, 0);       /* a stop word is found as one there */
             }
         }
 next_block:
