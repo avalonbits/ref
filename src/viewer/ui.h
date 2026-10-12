@@ -25,11 +25,12 @@
 
 #define SHELF_DIR "/config/ref/docs"
 
-/* Where document name is: SHELF_DIR/<name>.dat. */
+/* Where document name is: <name>.dat in the current directory, if that is
+ * a document, else SHELF_DIR/<name>.dat. */
 const char* shelf_path(const char* name);
 /* Is name a document's name: one to eight lower-case letters and digits? */
 int shelf_valid_name(const char* name);
-/* The documents installed, read: how many. */
+/* The documents here and installed, read: how many. */
 int shelf_scan(void);
 /* Each, one a line: its name and its title. */
 void shelf_print(void);

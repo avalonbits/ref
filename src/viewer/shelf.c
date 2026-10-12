@@ -1,6 +1,8 @@
 /*
- * The documents installed: every <name>.dat in /config/ref/docs, each with
- * its title. Plain `ref` shows them to choose from; `ref -p` prints them.
+ * The documents: every <name>.dat in the current directory that is a ref
+ * document -- a program's own, which ade compiles there -- and in
+ * /config/ref/docs, each with its title. A name in both is the current
+ * directory's. Plain `ref` shows them to choose from; `ref -p` prints them.
  */
 #include <stdio.h>
 #include <string.h>
@@ -17,19 +19,49 @@
 typedef struct {
     char name[NAME_MAX + 1];
     char title[TITLE_SHOW + 1];
+    char here;                      /* in the current directory */
 } document;
 
 static document docs[SHELF_MAX];
 static int ndocs;
 static int cursor;
 
-const char* shelf_path(const char* name)
+/* Whether the file is a ref document: a .dat in the current directory may
+ * be some other program's data. */
+static int is_document(const char* path)
+{
+    static const char MAGIC[8] = { 'A', 'G', 'O', 'N', 'R', 'E', 'F', 0x1a };
+    char head[8];
+    FILE* f = fopen(path, "rb");
+    int yes;
+
+    if (!f) {
+        return 0;
+    }
+    yes = fread(head, 1, 8, f) == 8 && memcmp(head, MAGIC, 8) == 0;
+    fclose(f);
+
+    return yes;
+}
+
+static const char* path_in(int here, const char* name)
 {
     static char path[sizeof SHELF_DIR + NAME_MAX + 8];
 
-    sprintf(path, "%s/%s.dat", SHELF_DIR, name);
+    if (here) {
+        sprintf(path, "%s.dat", name);
+    } else {
+        sprintf(path, "%s/%s.dat", SHELF_DIR, name);
+    }
 
     return path;
+}
+
+const char* shelf_path(const char* name)
+{
+    const char* local = path_in(1, name);
+
+    return is_document(local) ? local : path_in(0, name);
 }
 
 int shelf_valid_name(const char* name)
@@ -74,7 +106,7 @@ static void read_title(document* d)
     static char title[REF_TITLE_MAX + 1];
 
     strcpy(d->title, d->name);
-    if (ref_open(&f, shelf_path(d->name)) != REF_OK) {
+    if (ref_open(&f, path_in(d->here, d->name)) != REF_OK) {
         strcpy(d->title, "(cannot be read)");
 
         return;
@@ -86,25 +118,50 @@ static void read_title(document* d)
     ref_close(&f);
 }
 
-int shelf_scan(void)
+static int listed(const char* name)
+{
+    int i;
+
+    for (i = 0; i < ndocs; i++) {
+        if (strcmp(docs[i].name, name) == 0) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+/* A directory's documents, but for names already listed. */
+static void scan_dir(const char* path, int here)
 {
     static DIR dir;
     static FILINFO fi;
-    int i;
-    int j;
 
     /* Every entry, read in turn: ffs_dfindfirst's pattern matching has
      * been seen to find nothing. */
-    ndocs = 0;
-    if (ffs_dopen(&dir, SHELF_DIR) != 0) {
-        return 0;
+    if (ffs_dopen(&dir, path) != 0) {
+        return;
     }
     while (ndocs < SHELF_MAX && ffs_dread(&dir, &fi) == 0 && fi.fname[0]) {
-        if (!(fi.fattrib & AM_DIR) && doc_name(fi.fname, docs[ndocs].name)) {
+        document* d = &docs[ndocs];
+
+        if (!(fi.fattrib & AM_DIR) && doc_name(fi.fname, d->name) && !listed(d->name)
+            && (!here || is_document(path_in(1, d->name)))) {
+            d->here = (char)here;
             ndocs++;
         }
     }
     ffs_dclose(&dir);
+}
+
+int shelf_scan(void)
+{
+    int i;
+    int j;
+
+    ndocs = 0;
+    scan_dir(".", 1);                   /* first: its names win */
+    scan_dir(SHELF_DIR, 0);
 
     /* In order of name; few enough that sorting by insertion will do. */
     for (i = 1; i < ndocs; i++) {
@@ -128,7 +185,7 @@ void shelf_print(void)
     int i;
 
     for (i = 0; i < ndocs; i++) {
-        sprintf(line, "%-8s  %s\n", docs[i].name, docs[i].title);
+        sprintf(line, "%-8s %c %s\n", docs[i].name, docs[i].here ? '.' : ' ', docs[i].title);
         ui_print(line);
     }
 }
@@ -140,9 +197,11 @@ static void draw_row(int r)
         scr_colour(r == cursor ? C_SEL : C_CODE);
         scr_add(' ');
         scr_adds(docs[r].name);
-        while (scr_x() < NAME_MAX + 3) {
+        while (scr_x() < NAME_MAX + 2) {
             scr_add(' ');
         }
+        scr_add(docs[r].here ? '.' : ' ');
+        scr_add(' ');
         scr_colour(r == cursor ? C_SEL : C_TEXT);
         scr_adds(docs[r].title);
     }
@@ -159,7 +218,7 @@ static void draw(void)
     }
     scr_begin(scr_rows);
     scr_colour(C_STATUS);
-    scr_adds(" Documents   Enter: open   Esc: quit");
+    scr_adds(" Documents (. here)   Enter: open   Esc: quit");
     scr_end();
     LOG("shelf row %d of %d %s", cursor, ndocs, ndocs ? docs[cursor].name : "");
 }

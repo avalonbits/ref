@@ -21,13 +21,16 @@ agon-docs has no license, so until its maintainers settle one, build
 mos.dat yourself for your own card (see [Building](#building)).
 
 A document's name is its file's, without `.dat`: one to eight lower-case
-letters and digits. Any project can ship its documentation as a document:
+letters and digits. ref also finds documents in the current directory,
+where a program can keep its own: run there, `ref <name>` opens
+`<name>.dat` in it before one of the same name in `/config/ref/docs`, and
+`ref` lists both, the current directory's marked `.`. Any project can ship its documentation as a document:
 write it in Markdown and compile it with md2ref, or write the format,
 specified in [docs/FORMAT.md](docs/FORMAT.md), with any tool.
 
 ## Looking things up
 
-    ref                     the documents on the card, to choose one
+    ref                     the documents here and installed, to choose one
     ref <doc>               a document's contents, organised as its source is
     ref <doc> <query>       look it up; search the text if nothing matches
     ref <doc> -k <query>    look it up, and nothing else
@@ -96,13 +99,20 @@ ref uses the screen mode and font already in use; under hub, the prompt's.
 
 md2ref compiles Markdown pages into a document, on the Agon or on a PC:
 
-    md2ref -o /config/ref/docs/<name>.dat <dir>
-    md2ref -o <file.dat> [-t <title>] [-w] <dir> | <page.md>...
+    md2ref -o <name>.dat [-t <title>] [-w] <dir>
+    md2ref -o <name>.dat [-t <title>] [-w] <page.md>...
 
-A directory gives its `.md` files: `index.md` or `README.md` first, then
-the rest by name. A program's documentation lives in a `ref-doc/` directory
-beside its source, so `md2ref -o /config/ref/docs/myprog.dat ref-doc`
-installs it, and `ref myprog` reads it.
+`-o` is the document to write, and the rest is the Markdown to read: a
+directory, whose `.md` files are read with `index.md` or `README.md` first
+and the rest by name, or pages in the order given. `-t` sets the title
+(else the first page's first heading); `-w` makes a link that leads
+nowhere a warning instead of an error.
+
+    md2ref -o /config/ref/docs/myprog.dat docs      install it for everyone
+    md2ref -o ref-doc/myprog.dat docs               keep it with the program
+
+ade compiles a program's Markdown, wherever it is, into the program's
+`ref-doc/` directory; `ref myprog`, run in `ref-doc/`, reads it.
 
 - **Topics** are the headings, nested by level. A page that opens with its
   only `#` heading is that topic; otherwise the page is a topic titled

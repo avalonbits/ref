@@ -20,6 +20,9 @@ and `ref <name>` opens it. The name is the file's name without `.dat`: one
 to eight lower-case letters and digits, so it also fits MOS's short file
 names. `ref` alone lists the documents in that directory.
 
+ref looks in the current directory first: a `<name>.dat` there that starts
+with this format's magic is that name's document, before one installed.
+
 ## Conventions
 
 - Integers are little-endian: u8, u16, u32.

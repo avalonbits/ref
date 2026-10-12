@@ -117,6 +117,32 @@ check "  both return 100, and -f reads a document by its path" \
       "$(grep -a 'Try$ReturnCode' <<< "$out" | grep -oE '[0-9]+$' | tr '\n' ' ')" "100 100 0 "
 check "  which found cd there" "$(grep -ac '^Change current directory\.$' <<< "$out")" 1
 
+# --- a program's own documents, in the current directory: /proj has a
+# zap.dat of its own (md2ref's test document), which wins over the one
+# installed, and a .dat that is not a document ---
+make -s -C "$ROOT" out/host/md2ref > /dev/null || { echo "FAIL  md2ref"; exit 1; }
+sd=$(emu_card "$RELEASE")
+cp "$sd/config/ref/docs/mos.dat" "$sd/config/ref/docs/zap.dat"
+mkdir -p "$sd/proj"
+"$ROOT/out/host/md2ref" -o "$sd/proj/zap.dat" "$ROOT/build/tests/md2ref/doc" > /dev/null
+printf 'not a document\r\n' > "$sd/proj/junk.dat"
+{
+    printf 'cd /proj\r\nref -p\r\n'
+    printf 'Try ref zap -p -k strtoul\r\nShow Try$ReturnCode\r\n'
+    printf 'cd /\r\nref -p\r\n'
+} > "$sd/autoexec.txt"
+out=$(emu_run "$sd" 60)
+rm -rf "$sd"
+check "ref -p lists the current directory's documents too, marked ." \
+      "$(grep -aE '^(mos|zap|junk) ' <<< "$out" | head -2 | tr -s ' ' | tr '\n' ',')" \
+      "mos Community Agon Platform documentation,zap . My Program,"
+check "  and nothing there that is not a document" "$(grep -ac '^junk ' <<< "$out")" 0
+check "  ref zap opens the local one" "$(grep -ac '^strtol, strtoul, strtoll$' <<< "$out")" 1
+check "  and finds it, 0" "$(grep -a 'Try$ReturnCode' <<< "$out" | grep -oE '[0-9]+$')" 0
+check "  elsewhere, zap is the one installed" \
+      "$(grep -aE '^zap ' <<< "$out" | tail -1 | tr -s ' ')" \
+      "zap Community Agon Platform documentation"
+
 sd=$(emu_card "$SCRIPTED")
 cp "$sd/config/ref/docs/mos.dat" "$sd/config/ref/docs/zap.dat"
 printf 'ref\r\n' > "$sd/autoexec.txt"

@@ -159,9 +159,12 @@ which [`test/frames.sh`](../test/frames.sh) enforces.
   unless `-k`) and then prints, times or shows. Plain `ref` browses
   instead. It returns 0 when something was shown and 100 when nothing
   was, never 1, 4 or 5, which MOS reports as errors of its own.
-- [`shelf.c`](../src/viewer/shelf.c) finds the documents in
-  `/config/ref/docs`, reading the directory entry by entry, with each
-  document's title from its header, and shows them to choose from. Esc
+- [`shelf.c`](../src/viewer/shelf.c) finds the documents in the current
+  directory and in `/config/ref/docs`, reading each directory entry by
+  entry, with each document's title from its header, and shows them to
+  choose from. A name in both is the current directory's; a `.dat` there
+  counts only if it starts with the format's magic, as it could be any
+  program's data. Esc
   from a document's contents, with no topic open, comes back here; the
   views are reset before the next document opens.
 - [`nav.c`](../src/viewer/nav.c) moves between the views (a topic, the

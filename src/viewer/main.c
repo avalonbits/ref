@@ -1,8 +1,9 @@
 /*
  * ref: documentation on the Agon. Each document is a file in the format of
- * docs/FORMAT.md, installed as /config/ref/docs/<name>.dat.
+ * docs/FORMAT.md, installed as /config/ref/docs/<name>.dat -- or in the
+ * current directory, as <name>.dat, which comes first.
  *
- *   ref                     the documents installed, to choose one
+ *   ref                     the documents here and installed, to choose one
  *   ref <doc>               a document's contents
  *   ref <doc> <query>       a key lookup, then a search if nothing matches
  *   ref <doc> -k <query>    the key lookup only: what ade's F1 runs
@@ -248,7 +249,7 @@ static int browse(void)
     const char* name;
 
     if (shelf_scan() == 0) {
-        sprintf(line, "ref: no documents in %s\n", SHELF_DIR);
+        sprintf(line, "ref: no documents here or in %s\n", SHELF_DIR);
         ui_print(line);
 
         return NOTHING;
