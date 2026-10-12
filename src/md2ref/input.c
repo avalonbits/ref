@@ -1,8 +1,8 @@
 /*
  * The pages: which they are -- the files given, or a directory's .md files
- * in name order, index.md or README.md first -- and, one at a time, a
- * page's file read whole, split into lines with tabs expanded to stops of
- * four, and parsed into the source's arena.
+ * in name order, index.md or README.md first -- and each read through a
+ * window, a run of whole blocks at a time, as lines with tabs expanded to
+ * stops of four.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -46,60 +46,6 @@ static int same_lower(const char* a, const char* b)
     return *a == *b;
 }
 
-/* A file's lines, \r dropped and tabs expanded. */
-static void split_lines(page* p, char* text)
-{
-    int n = 1;
-    int k = 0;
-    char* s;
-
-    for (s = text; *s; s++) {
-        n += *s == '\n';
-    }
-    p->lines = md_realloc(NULL, (unsigned)n * (unsigned)sizeof(line));
-    s = text;
-    while (*s) {
-        char* e = strchr(s, '\n');
-        int len = e ? (int)(e - s) : (int)strlen(s);
-        int tabs = 0;
-        int j;
-
-        while (len > 0 && s[len - 1] == '\r') {
-            len--;
-        }
-        for (j = 0; j < len; j++) {
-            tabs += s[j] == '\t';
-        }
-        if (tabs) {
-            char* t = source_alloc((unsigned)(len + tabs * 4 + 1));
-            int col = 0;
-
-            for (j = 0; j < len; j++) {
-                if (s[j] == '\t') {
-                    do {
-                        t[col++] = ' ';
-                    } while (col % 4);
-                } else {
-                    t[col++] = s[j];
-                }
-            }
-            t[col] = 0;
-            p->lines[k].text = t;
-            p->lines[k].len = col;
-        } else {
-            p->lines[k].text = s;
-            p->lines[k].len = len;
-        }
-        p->lines[k].no = k + 1;
-        k++;
-        if (!e) {
-            break;
-        }
-        s = e + 1;
-    }
-    p->nlines = k;
-}
-
 static int add_page(const char* path)
 {
     const char* slash = strrchr(path, '/');
@@ -117,40 +63,303 @@ static int add_page(const char* path)
     return 0;
 }
 
-int load_page(int i)
+/* --- a page, a run of whole blocks at a time ----------------------------------- */
+
+#define WINDOW     8192             /* to start with; it doubles for a long block */
+#define WINDOW_MAX 32768
+
+static FILE* in;
+static const char* in_path;
+static char* win;                   /* the file, from beg to end */
+static unsigned win_size;
+static unsigned beg;
+static unsigned end;
+static unsigned taken;              /* the last run's bytes, gone at the next call */
+static int at_eof;
+static int next_no;                 /* the number of the line at beg */
+static int fresh;                   /* nothing read yet: front matter may come */
+
+static line* run;                   /* the run's lines */
+static int run_size;
+static char* expanded;              /* lines with tabs, expanded */
+static unsigned expanded_size;
+static char* look;                  /* a line expanded, to see what it is */
+static unsigned look_size;
+
+int page_open(int i)
 {
-    page* p = &pages[i];
-    FILE* f = fopen(p->path, "rb");
-    long size;
-    char* text;
-
-    if (!f) {
-        md_error(p->path, 0, "cannot be read");
+    in_path = pages[i].path;
+    in = fopen(in_path, "rb");
+    if (!in) {
+        md_error(in_path, 0, "cannot be read");
 
         return -1;
     }
-    fseek(f, 0, SEEK_END);
-    size = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    text = md_realloc(NULL, (unsigned)size + 1);
-    if (size > 0 && fread(text, 1, (size_t)size, f) != (size_t)size) {
-        fclose(f);
-        free(text);
-        md_error(p->path, 0, "cannot be read");
-
-        return -1;
+    if (!win) {
+        win_size = WINDOW;
+        win = md_realloc(NULL, win_size);
     }
-    fclose(f);
-    text[size] = 0;
-    split_lines(p, text);
-    parse_page(p);
-    /* Every block has its own copy of its text: the file and its lines can
-     * go now, before the page is used. */
-    free(p->lines);
-    p->lines = NULL;
-    free(text);
+    beg = end = taken = 0;
+    at_eof = 0;
+    next_no = 1;
+    fresh = 1;
 
     return 0;
+}
+
+void page_close(void)
+{
+    if (in) {
+        fclose(in);
+        in = NULL;
+    }
+}
+
+/* More of the file into the window, what is left moved to its start. 0, or
+ * -1 if the window is full and as big as it may be. */
+static int fill(void)
+{
+    unsigned n;
+
+    if (beg > 0) {
+        memmove(win, win + beg, end - beg);
+        end -= beg;
+        beg = 0;
+    }
+    if (end == win_size) {
+        if (win_size >= WINDOW_MAX) {
+            return -1;
+        }
+        win_size *= 2;
+        win = md_realloc(win, win_size);
+    }
+    n = (unsigned)fread(win + end, 1, win_size - end, in);
+    end += n;
+    if (n == 0) {
+        at_eof = 1;
+    }
+
+    return 0;
+}
+
+/* The line at offset r from beg: where it ends (its '\n', or the end of the
+ * file), -1 if there is none, or -2 if more must be read first. */
+static int line_at(unsigned r)
+{
+    const char* nl;
+
+    if (beg + r >= end) {
+        return at_eof ? -1 : -2;
+    }
+    nl = memchr(win + beg + r, '\n', end - beg - r);
+    if (nl) {
+        return (int)(nl - (win + beg));
+    }
+
+    return at_eof ? (int)(end - beg) : -2;
+}
+
+static int tabs_in(const char* s, int len)
+{
+    int n = 0;
+    int k;
+
+    for (k = 0; k < len; k++) {
+        n += s[k] == '\t';
+    }
+
+    return n;
+}
+
+/* s, tabs expanded to stops of four, into out. */
+static int expand(const char* s, int len, char* out)
+{
+    int col = 0;
+    int k;
+
+    for (k = 0; k < len; k++) {
+        if (s[k] == '\t') {
+            do {
+                out[col++] = ' ';
+            } while (col % 4);
+        } else {
+            out[col++] = s[k];
+        }
+    }
+
+    return col;
+}
+
+/* The line from r to e as the parser sees it, \r dropped, tabs expanded. */
+static line seen(unsigned r, int e)
+{
+    line l;
+    const char* s = win + beg + r;
+    int len = e - (int)r;
+    int tabs;
+
+    while (len > 0 && s[len - 1] == '\r') {
+        len--;
+    }
+    tabs = tabs_in(s, len);
+    l.text = s;
+    l.len = len;
+    l.no = 0;
+    if (tabs) {
+        unsigned need = (unsigned)(len + tabs * 3 + 1);
+
+        if (need > look_size) {
+            look_size = need;
+            look = md_realloc(look, look_size);
+        }
+        l.len = expand(s, len, look);
+        l.text = look;
+    }
+
+    return l;
+}
+
+/* A run may end before l: it starts a block, and no block before it can
+ * take it in -- it is at the margin, after a blank line, and not a list
+ * item (which a list before it would take). */
+static int starts_run(const line* l)
+{
+    return !line_blank(l) && line_indent(l) == 0 && !line_item(l);
+}
+
+/* Front matter, --- lines at the very top: skipped. 0, or -1. */
+static int skip_front(void)
+{
+    unsigned r = 0;
+    int lines = 0;
+    int e;
+
+    for (;;) {
+        line l;
+
+        while ((e = line_at(r)) == -2) {
+            if (fill() != 0) {
+                return -1;
+            }
+        }
+        if (e < 0) {
+            return 0;                       /* never closed: no front matter */
+        }
+        l = seen(r, e);
+        lines++;
+        if (lines == 1 ? !(l.len >= 3 && memcmp(l.text, "---", 3) == 0)
+                       : l.len >= 3 && memcmp(l.text, "---", 3) == 0) {
+            if (lines > 1) {
+                beg += (unsigned)e + (beg + (unsigned)e < end);
+                next_no += lines;
+            }
+
+            return 0;
+        }
+        r = (unsigned)e + 1;
+    }
+}
+
+int page_next(line** lines, int* n)
+{
+    unsigned r;
+    int fenced;
+    char mark = 0;
+    int open_len = 0;
+    int was_blank;
+    int count;
+    int e;
+    unsigned size;
+    char* x;
+
+    beg += taken;
+    taken = 0;
+    if (fresh) {
+        fresh = 0;
+        if (skip_front() != 0) {
+            md_error(in_path, next_no, "a block of more than %u bytes", (unsigned)WINDOW_MAX);
+
+            return -1;
+        }
+    }
+
+    /* Where the run ends, read into the window as far as it needs. */
+scan:
+    r = 0;
+    fenced = 0;
+    was_blank = 0;
+    count = 0;
+    size = 0;
+    for (;;) {
+        line l;
+
+        e = line_at(r);
+        if (e == -2) {
+            if (fill() != 0) {
+                md_error(in_path, next_no, "a block of more than %u bytes: md2ref reads a"
+                         " page %u bytes at a time", (unsigned)WINDOW_MAX, (unsigned)WINDOW_MAX);
+
+                return -1;
+            }
+            goto scan;
+        }
+        if (e == -1) {
+            break;
+        }
+        l = seen(r, e);
+        if (count > 0 && !fenced && was_blank && starts_run(&l)) {
+            break;
+        }
+        if (fenced) {
+            fenced = !line_closes(&l, open_len, mark);
+        } else if ((open_len = line_fence(&l, &mark)) != 0) {
+            fenced = 1;
+        }
+        was_blank = line_blank(&l);
+        count++;
+        size += (unsigned)(tabs_in(win + beg + r, e - (int)r) * 3 + l.len + 1);
+        r = (unsigned)e + (beg + (unsigned)e < end);
+    }
+    if (count == 0) {
+        return 0;
+    }
+
+    /* Its lines: in the window, or expanded beside it. */
+    if (count > run_size) {
+        run_size = count + 64;
+        run = md_realloc(run, (unsigned)run_size * (unsigned)sizeof(line));
+    }
+    if (size > expanded_size) {
+        expanded_size = size + 256;
+        expanded = md_realloc(expanded, expanded_size);
+    }
+    x = expanded;
+    taken = r;
+    r = 0;
+    for (count = 0; (unsigned)r < taken; count++) {
+        const char* s = win + beg + r;
+        int len;
+
+        e = line_at(r);
+        len = e - (int)r;
+        while (len > 0 && s[len - 1] == '\r') {
+            len--;
+        }
+        run[count].no = next_no++;
+        if (tabs_in(s, len)) {
+            run[count].len = expand(s, len, x);
+            run[count].text = x;
+            x += run[count].len;
+        } else {
+            run[count].text = s;
+            run[count].len = len;
+        }
+        r = (unsigned)e + 1;
+    }
+    *lines = run;
+    *n = count;
+
+    return 1;
 }
 
 /* --- directories -------------------------------------------------------------- */

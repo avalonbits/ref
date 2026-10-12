@@ -129,7 +129,9 @@ offset.
 
 ## Text
 
-Each topic's markup, compressed on its own as an LZ4 block (LZ4's block
+Each topic's markup, compressed on its own as an LZ4 block, the topics in
+any order: a topic's offset says where it is (md2ref writes a topic once
+its descendants are read, after them). The block is LZ4's (its
 format: a token byte with the literal count in its high nibble and the
 match length less 4 in its low; more length bytes while 255; the literals;
 a 2-byte offset; more match-length bytes while 255; the last sequence

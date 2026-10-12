@@ -8,9 +8,12 @@ reader core, as ref on the Agon reads them.
 import glob
 import os
 import shutil
+import struct
 import subprocess
 import tempfile
 import unittest
+
+from refbuild.keys import STOP_WORDS
 
 from .agon_docs import ROOT, docs
 
@@ -47,6 +50,50 @@ def ask(data, mode, lines=(), *extra):
     return p.stdout
 
 
+def views(data):
+    """Each topic's view: its markup, and its span's after it."""
+    out = []
+    with tempfile.NamedTemporaryFile(suffix='.dat') as f:
+        f.write(data)
+        f.flush()
+        raw = subprocess.run([TOOL, f.name, 'views'], capture_output=True, check=True).stdout
+    i = 0
+    while i < len(raw):
+        n = raw[i] | raw[i + 1] << 8
+        out.append(raw[i + 2:i + 2 + n])
+        i += 2 + n
+
+    return out
+
+
+def link(t):
+    return bytes([0x14, t & 0xFF, t >> 8])
+
+
+def compile_pages(pages, *args):
+    """The document md2ref writes from pages, {name: text}, in a folder."""
+    with tempfile.TemporaryDirectory() as d:
+        for name, text in pages.items():
+            with open(os.path.join(d, name), 'w') as f:
+                f.write(text)
+        out = os.path.join(d, 'out.dat')
+        p = subprocess.run([MD2REF, '-o', out, *args, d], capture_output=True, text=True)
+        data = None
+        if p.returncode == 0:
+            with open(out, 'rb') as f:
+                data = f.read()
+        # Scratch files left -- and, after a failure, any document at all.
+        left = sorted(set(os.listdir(d)) - set(pages) - ({'out.dat'} if data else set()))
+
+        return p, data, left
+
+
+def filler(word, n):
+    """n paragraphs of text naming word, about 100 bytes each."""
+    return ''.join('The %s paragraph %d says nothing much at all, at some length, to fill a '
+                   'topic.\n\n' % (word, k) for k in range(n))
+
+
 @unittest.skipUnless(os.path.exists(MD2REF) and os.path.exists(TOOL), 'no out/host: make host')
 class Md2ref(unittest.TestCase):
     def test_contents_follow_the_headings(self):
@@ -58,6 +105,16 @@ class Md2ref(unittest.TestCase):
                                '  strtol, strtoul, strtoll  [4]',
                                '    VDU 23, 0, &A0, n: Buffered  [5]'])
 
+    def test_settings_hold_the_stop_words(self):
+        # No hex-after words, no skips, and the builder's stop words, sorted.
+        data = compile_doc('doc')
+        norm, end = struct.unpack_from('<II', data, 84)
+        settings = data[norm:end]
+        want = bytes([0, 0, len(STOP_WORDS)])
+        for w in sorted(STOP_WORDS):
+            want += bytes([len(w)]) + w.encode()
+        self.assertEqual(settings, want)
+
     def test_title_from_the_first_heading_or_t(self):
         self.assertIn('title My Program\n', ask(compile_doc('doc'), 'info'))
         self.assertIn('title Other\n', ask(compile_doc('-t', 'Other', 'doc'), 'info'))
@@ -66,6 +123,16 @@ class Md2ref(unittest.TestCase):
         info = ask(compile_doc('doc'), 'info')
         self.assertIn('commit md2ref\n', info)
         self.assertIn('date \n', info)
+
+    def test_links_forward_back_and_in_a_cell(self):
+        # index.md links forward, to pages not read yet: placeholders,
+        # patched; api.md links back, to a page read; and in a table's cell,
+        # to its own page, read once the page is.
+        v = views(compile_doc('doc'))
+        self.assertIn(link(2) + b'the API', v[0])
+        self.assertIn(link(3) + b'\x12frob', v[0])         # [`frob`](api.md#frob)
+        self.assertIn(link(0) + b'the start', v[3])
+        self.assertIn(link(3) + b'unused', v[3])            # in a cell, wrapped or not
 
     def test_code_spans_in_headings_are_keys(self):
         # frob(int x) is a key only as the span is: the title's words are
@@ -113,9 +180,12 @@ class Md2ref(unittest.TestCase):
             self.assertTrue(os.path.exists(out))
 
     def test_unclosed_fence_is_an_error(self):
-        p = md2ref('-o', os.devnull, os.path.join('bad', 'fence.md'))
-        self.assertEqual(p.returncode, FAILED)
-        self.assertEqual(p.stdout, 'bad/fence.md:3: error: code block never closed\n')
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, 'x.dat')
+            p = md2ref('-o', out, os.path.join('bad', 'fence.md'))
+            self.assertEqual(p.returncode, FAILED)
+            self.assertEqual(p.stdout, 'bad/fence.md:3: error: code block never closed\n')
+            self.assertEqual(os.listdir(d), [])     # nothing written, no scratch left
 
     def test_name_writes_ref_doc_from_the_current_directory(self):
         with tempfile.TemporaryDirectory() as d:
@@ -181,6 +251,127 @@ class Md2ref(unittest.TestCase):
             md2ref('-e', errs, '-o', os.path.join(d, 'x.dat'), 'doc')
             with open(errs) as f:
                 self.assertEqual(f.read(), '')
+
+    def test_a_topic_too_big_to_show_its_children_links_to_them(self):
+        # Big's subtree is over 16 KB, so it ends with links to its
+        # children; Small's is not, so it shows them, and has none.
+        page = ('# Big\n\n' + filler('big', 10) + '## Part one\n\n' + filler('one', 150)
+                + '## Part two\n\n' + filler('two', 150) + '# Small\n\nIntro.\n\n## Bit\n\nA bit.\n')
+        p, data, left = compile_pages({'index.md': page})
+        self.assertEqual(p.returncode, 0, p.stdout)
+        contents = ask(data, 'contents').splitlines()
+        self.assertEqual([c.strip() for c in contents][:6],
+                         ['index  [0]', 'Big  [1]', 'Part one  [2]', 'Part two  [3]', 'Small  [4]',
+                          'Bit  [5]'])
+        v = views(data)
+        self.assertIn(b'In this section:', v[1])
+        self.assertIn(link(2) + b'Part one', v[1])
+        self.assertIn(link(3) + b'Part two', v[1])
+        self.assertNotIn(b'In this section:', v[4])
+        self.assertIn(b'A bit.', v[4])                      # shown with its child
+        # The page's top, made when Small began, counts all under it.
+        self.assertIn(link(1) + b'Big', v[0])
+        self.assertIn(link(4) + b'Small', v[0])
+        self.assertEqual(left, [])
+
+    def test_a_link_to_a_page_not_read_yet_that_leads_nowhere(self):
+        # Pending until every page is read; then an error at its line.
+        p, data, left = compile_pages({'index.md': '# A\n\nSee\n[it](b.md#nothing).\n',
+                                       'b.md': '# B\n\nText.\n'})
+        self.assertEqual(p.returncode, FAILED)
+        self.assertRegex(p.stdout, r"index\.md:3: error: cannot resolve link 'b\.md#nothing'\n$")
+        self.assertIsNone(data)
+        self.assertEqual(left, [])
+
+    def test_a_second_level_1_heading_makes_the_page_its_top(self):
+        # The first # heading is taken for the top until the second shows
+        # it is not: then the page's top comes first, and the numbers of all
+        # the page has read move up -- in the menus and the words as well.
+        # One A is too big to show A1 and A2, so its links to them are
+        # written when One B begins -- before Two shows the page needs a top.
+        page = ('# One\n\n' + filler('alpha', 5) + '## One A\n\n' + filler('aardvark', 250)
+                + '### A1\n\nFirst.\n\n### A2\n\nSecond.\n\n## One B\n\nBee.\n\n# Two\n\nZebra.\n')
+        other = '# Other\n\nSee [One B](multi.md#one-b) and [Two](multi.md#two).\n'
+        p, data, left = compile_pages({'index.md': other, 'multi.md': page})
+        self.assertEqual(p.returncode, 0, p.stdout)
+        contents = [c.strip() for c in ask(data, 'contents').splitlines()]
+        self.assertEqual(contents, ['Other  [0]', 'multi  [1]', 'One  [2]', 'One A  [3]',
+                                    'A1  [4]', 'A2  [5]', 'One B  [6]', 'Two  [7]'])
+        v = views(data)
+        self.assertIn(link(4) + b'A1', v[3])                # written before the top was made
+        self.assertIn(link(5) + b'A2', v[3])
+        self.assertIn(link(3) + b'One A', v[2])             # written after
+        self.assertIn(link(6) + b'One B', v[2])
+        self.assertIn(link(6) + b'One B', v[0])             # links from before the page
+        self.assertIn(link(7) + b'Two', v[0])
+        got = ask(data, 'search', ['aardvark', 'zebra', 'bee', 'second']).splitlines()
+        self.assertEqual([g.split()[1].split(':')[0] for g in got], ['3', '7', '6', '5'])
+
+    def test_a_page_with_its_only_level_1_heading_first_has_it_as_top(self):
+        # Its title words are all stop words: no keys at all, which is fine.
+        p, data, _ = compile_pages({'index.md': '# Only\n\nText.\n\n## Under\n\nMore.\n'})
+        self.assertEqual(p.returncode, 0, p.stdout)
+        self.assertEqual([c.strip() for c in ask(data, 'contents').splitlines()],
+                         ['Only  [0]', 'Under  [1]'])
+        self.assertIn('keys 0\n', ask(data, 'info'))
+
+    def test_a_page_bigger_than_the_window(self):
+        # Pages are read a run of blocks at a time, through 8 KB to start:
+        # a 200 KB page compiles as it would whole.
+        # With a 20 KB code block, which the window grows to hold.
+        code = '```\n' + 'y = 2\n' * 3400 + 'endofcode\n```\n\n'
+        page = '# Long\n\n' + ''.join('## Part %d\n\n' % k + filler('part%d' % k, 20)
+                                       + (code if k == 50 else '') for k in range(100))
+        p, data, left = compile_pages({'index.md': page})
+        self.assertEqual(p.returncode, 0, p.stdout)
+        self.assertEqual(ask(data, 'info').split('\ntopics ')[1].split('\n')[0], '101')
+        got = ask(data, 'search', ['part0', 'part57', 'part99', 'endofcode']).splitlines()
+        self.assertEqual([g.split()[1].split(':')[0] for g in got], ['1', '58', '100', '51'])
+
+    def test_runs_end_only_where_blocks_must(self):
+        # Each of these would come out differently if a run ended inside
+        # it: blank lines then a line at the margin, inside a fence (never
+        # closed); a paragraph's second line (two paragraphs); a list
+        # numbered 1. 1. with a blank line between (numbered afresh); a
+        # note's body. Repeated past the window's first 8 KB.
+        unit = ('## Unit {k}\n\n```\nfence {k} top\n\nat the margin {k}\n```\n\n'
+                'After {k}.\nAnd more {k}.\n\n'
+                '1. item {k} one\n\n1. item {k} two\n\n   more of two {k}\n\n'
+                '!!! note "Note {k}"\n    body {k}\n\n    more body {k}\n\nEnd {k}.\n\n')
+        page = '# Runs\n\n' + ''.join(unit.format(k=k) for k in range(80))
+        p, data, left = compile_pages({'index.md': page})
+        self.assertEqual(p.returncode, 0, p.stdout)
+        v = b''.join(views(data))
+        text = ask(data, 'layout', (), '76')
+        for k in (0, 41, 79):
+            with self.subTest(unit=k):
+                self.assertIn(('fence %d top\n\nat the margin %d\n\x00' % (k, k)).encode(), v)
+                self.assertIn(('After %d. And more %d.\x00' % (k, k)).encode(), v)
+                self.assertIn('1. item %d one\n\n2. item %d two\n' % (k, k), text)
+                self.assertIn('| Note %d\n| body %d\n' % (k, k), text)
+
+    def test_words_past_one_run(self):
+        # More words than one 24 KB run of the words file holds: sorted in
+        # runs, merged, every word still finds its topic.
+        page = '# Words\n\n' + ''.join(
+            '## T%d\n\n%s\n\n' % (k, ' '.join('w%dq%s' % (k, c) for c in 'abcdefghijklmnop'))
+            for k in range(250))
+        p, data, left = compile_pages({'index.md': page})
+        self.assertEqual(p.returncode, 0, p.stdout)
+        # 16 for each, its title (T10 on: three letters), Words, and
+        # section: Words is too big to show its children, so links to them.
+        self.assertIn('words %d\n' % (250 * 16 + 240 + 2), ask(data, 'info'))
+        got = ask(data, 'search', ['w0qa', 'w123qh', 'w249qp']).splitlines()
+        self.assertEqual([g.split()[1].split(':')[0] for g in got], ['1', '124', '250'])
+
+    def test_a_block_longer_than_the_window_can_grow_to(self):
+        # One code block of 40 KB: past the 32 KB the window may grow to.
+        page = '# Big code\n\n```\n' + 'x = 1\n' * 7000 + '```\n'
+        p, data, left = compile_pages({'index.md': page})
+        self.assertEqual(p.returncode, FAILED)
+        self.assertRegex(p.stdout, r'index\.md:3: error: a block of more than 32768 bytes')
+        self.assertIsNone(data)
+        self.assertEqual(left, [])
 
     def test_usage(self):
         for args in ((), ('-o', 'x.dat'), ('-q', '-o', 'x.dat', 'doc')):

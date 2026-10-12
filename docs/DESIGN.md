@@ -215,32 +215,59 @@ compile to nothing there.
 [`src/md2ref`](../src/md2ref) compiles Markdown pages into a document. It
 is portable C, built for the PC by `make host` and for the Agon by
 [`md2ref.mk`](../md2ref.mk), and gives the same bytes on both.
-[`md2ref.h`](../src/md2ref/md2ref.h) lists its files; in the order it
-runs:
+[`md2ref.h`](../src/md2ref/md2ref.h) lists its files. It reads each page
+once, and writes each topic as soon as it can:
 
 | Step | Where | What |
 |---|---|---|
-| pages | [`input.c`](../src/md2ref/input.c) | the files given, or a directory's `.md` files, index first; a page's file read whole and split into lines |
-| blocks | [`parse.c`](../src/md2ref/parse.c) | a page's lines into blocks: headings, paragraphs, code, lists, quotes, notes, tables, one function each |
-| outline | [`book.c`](../src/md2ref/book.c) | topics from headings, anchors as Python-Markdown makes them, then the contents |
-| markup | [`render.c`](../src/md2ref/render.c), [`inline.c`](../src/md2ref/inline.c) | each topic in ref's markup, links resolved, tables laid out; menus for topics too big to show with their children |
-| indexes | [`index.c`](../src/md2ref/index.c) | keys from headings' code spans, VDU sequences and title words, normalised by the reader core's own [`normalize.c`](../src/core/normalize.c); every word for the search |
-| file | [`write.c`](../src/md2ref/write.c), [`lz4w.c`](../src/md2ref/lz4w.c) | each topic compressed, and the sections in order |
+| pages | [`input.c`](../src/md2ref/input.c) | the files given, or a directory's `.md` files, index first; each read through a window a *run* at a time |
+| blocks | [`parse.c`](../src/md2ref/parse.c) | a run's lines into blocks: headings, paragraphs, code, lists, quotes, notes, tables, one function each |
+| outline | [`book.c`](../src/md2ref/book.c) | topics from headings as they come, anchors as Python-Markdown makes them, links resolved or left pending |
+| markup | [`render.c`](../src/md2ref/render.c), [`inline.c`](../src/md2ref/inline.c) | each topic in ref's markup, tables laid out, compressed, and held until its descendants are read |
+| text | [`write.c`](../src/md2ref/write.c), [`lz4w.c`](../src/md2ref/lz4w.c) | each topic, complete, to the text's scratch file |
+| indexes | [`index.c`](../src/md2ref/index.c) | keys from headings' code spans, VDU sequences and title words, normalised by the reader core's own [`normalize.c`](../src/core/normalize.c); every word of every topic to the words' scratch file |
+| document | [`write.c`](../src/md2ref/write.c) | the tables from memory, the text copied in with each link patched, the words sorted and merged in |
 
-**Memory.** The Agon gives md2ref about 370 KB. So it goes through the
-pages twice, one at a time
-([`md2ref.c`](../src/md2ref/md2ref.c), `outline` and `render`): first for
-their topics and anchors, then, every link's target known, for their
-markup. A page's file and lines are freed as soon as it is parsed; its
-blocks and their text live in a *source* arena that is dropped after the
-page; what lasts goes in the *book's*. Each topic's markup is kept
-compressed, as the file holds it ([`lz4.c`](../src/core/lz4.c) undoes it
-for the index, and for a menu, which is added afterwards rather than
-rendered again from the page). Index words are interned, counted once per
-topic, and freed once their section is made. agon-docs' 105 KB of
-top-level pages peak at 245 KB, and its largest page, 96 KB, alone at
-240 KB (`make agon-md2ref-heap` measures it); parsing one page costs about
-three times its size.
+**One pass, in fixed memory,** as aed, acc and zap work. The window holds
+whole lines, 8 KB to start and up to 32 KB for a long block. A run ends
+only where a block must: after a blank line, outside a code fence, before
+a line at the margin that is not a list item. Every container ends there,
+so the parser sees each run as it would the whole page. A topic's blocks,
+in a *source* arena, go when the next topic begins. What lasts goes in the
+*book's* arena: titles, headings, anchors.
+
+Three things are not known when a topic is read, and are settled the way
+an assembler settles a forward reference:
+
+- **A link to a page not read yet** is a placeholder, and the link is
+  remembered with its target. The compressor leaves those two bytes as
+  literals, never matched or matched from, so they lie in the file as they
+  do in the markup. When the document is put together, every anchor known,
+  each is patched as the text is copied in.
+- **Links to a topic's children** are added only if it shows too much with
+  its descendants, which is only known once the last of them is read. So a
+  topic is held, compressed, until then. Only its ancestors are held with
+  it, at most a few.
+- **A page's top topic** is its level-1 heading if that is the page's
+  first block and its only level-1 heading. The first is taken to be the
+  only one until a second shows otherwise. Then the page's top, titled by
+  its name, is made in front of the first, and the page's topics move up
+  one. The words file and the links to children hold each topic's number
+  *as made*, mapped to its place at the end, so what was already written
+  needs no change.
+
+The tables come before the text in the document but are only complete at
+the end. So the text goes to a scratch file, and the document is written
+front to back once everything is known, the header last, into the space
+left for it. The words are never all in memory either. Each topic's
+distinct words go to a second scratch file. At the end it is sorted in
+24 KB runs into a third, and those are merged through a 512-byte window
+each.
+
+All of agon-docs, 637 KB of Markdown and 721 topics, peaks at about
+280 KB on the Agon (`make agon-md2ref-heap` measures it). What grows with
+a document is its outline: its topics, their titles and anchors, and its
+keys.
 
 **Not the builder.** md2ref has no rules file: no hand-made keys, no link
 fixes, no gaps report, no shared dictionary. Its keys are what headings

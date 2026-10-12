@@ -39,7 +39,6 @@
 
 int md_errors;
 int md_keep_going;
-int md_quiet;
 
 static FILE* errors;        /* -e */
 
@@ -177,6 +176,16 @@ void arena_back(arena_mark m)
     }
 }
 
+static char* copy_in(chunk** chunks, const char* s)
+{
+    unsigned n = (unsigned)strlen(s);
+    char* p = alloc_in(chunks, n + 1);
+
+    memcpy(p, s, n + 1);
+
+    return p;
+}
+
 void* source_alloc(unsigned n)
 {
     return alloc_in(&source_chunks, n);
@@ -192,16 +201,30 @@ char* source_strndup(const char* s, unsigned n)
     return p;
 }
 
-void drop_source(void)
+/* Blocks still wanted, their strings copied to a fresh source arena and
+ * the old one freed: the topics before them are done with. */
+static void keep_blocks(block* b, int n)
 {
-    int i;
+    chunk* fresh = NULL;
+    int k;
+    int j;
 
-    free_all(&source_chunks);
-    for (i = 0; i < npages; i++) {
-        free(pages[i].blocks);
-        pages[i].lines = NULL;
-        pages[i].blocks = NULL;
+    for (k = 0; k < n; k++) {
+        const char** ids = NULL;
+
+        if (b[k].nids) {
+            ids = alloc_in(&fresh, (unsigned)b[k].nids * (unsigned)sizeof(char*));
+            for (j = 0; j < b[k].nids; j++) {
+                ids[j] = copy_in(&fresh, b[k].ids[j]);
+            }
+        }
+        b[k].text = b[k].text ? copy_in(&fresh, b[k].text) : NULL;
+        b[k].marker = b[k].marker ? copy_in(&fresh, b[k].marker) : NULL;
+        b[k].id = b[k].id ? copy_in(&fresh, b[k].id) : NULL;
+        b[k].ids = ids;
     }
+    free_all(&source_chunks);
+    source_chunks = fresh;
 }
 
 /* --- errors ------------------------------------------------------------------------ */
@@ -227,9 +250,6 @@ void md_error(const char* file, int no, const char* fmt, ...)
     static char message[300];
     va_list ap;
 
-    if (md_quiet) {
-        return;
-    }
     va_start(ap, fmt);
     vsnprintf(message, sizeof message, fmt, ap);
     va_end(ap);
@@ -242,9 +262,6 @@ void md_warn(const char* file, int no, const char* fmt, ...)
     static char message[300];
     va_list ap;
 
-    if (md_quiet) {
-        return;
-    }
     va_start(ap, fmt);
     vsnprintf(message, sizeof message, fmt, ap);
     va_end(ap);
@@ -289,47 +306,6 @@ static int read_list(const char* path, char** inputs, int* n, int max)
 
 /* --- the steps ------------------------------------------------------------------- */
 
-/* The first pass: each page's topics and anchors. */
-static int outline(void)
-{
-    int i;
-
-    for (i = 0; i < npages; i++) {
-        if (load_page(i) == 0) {
-            book_page(i);
-            pages[i].outlined = pages[i].nblocks;
-        }
-        drop_source();
-    }
-
-    return md_errors ? -1 : 0;
-}
-
-/* The second: each page's topics' markup. Its blocks are as the outline
- * found them -- and what was wrong with them was said then. */
-static int render(void)
-{
-    int i;
-
-    for (i = 0; i < npages; i++) {
-        int loaded;
-
-        md_quiet = 1;
-        loaded = load_page(i) == 0 && pages[i].nblocks == pages[i].outlined;
-        md_quiet = 0;
-        if (!loaded) {
-            md_error(pages[i].path, 0, "changed while md2ref was reading it");
-            drop_source();
-
-            return -1;
-        }
-        render_page(i);
-        drop_source();
-    }
-
-    return md_errors ? -1 : 0;
-}
-
 #define DOC_DIR "ref-doc"
 
 static int usage(void)
@@ -355,6 +331,80 @@ static int valid_name(const char* s)
     }
 
     return n >= 1 && n <= 8;
+}
+
+/* A page, read once: each run of its lines parsed, and each topic, as the
+ * next begins, rendered and written -- or held, until its descendants are
+ * read. */
+static int read_page(int pi)
+{
+    page* p = &pages[pi];
+    line* L;
+    int n;
+    int got;
+    int cur = -1;               /* the topic being read */
+    int seen = 0;               /* its blocks looked at */
+    int any = 0;                /* a block yet on this page */
+
+    if (page_open(pi) != 0) {
+        return -1;
+    }
+    book_page(pi);
+    parse_begin(p);
+    while ((got = page_next(&L, &n)) == 1) {
+        int done_some = 0;
+
+        parse_run(p, L, n);
+        for (; seen < p->nblocks; seen++) {
+            const block* b = &p->blocks[seen];
+
+            if (!any) {
+                any = 1;
+                cur = book_top(pi, b);
+            }
+            if (book_starts_topic(b)) {
+                int next;
+
+                if (cur >= 0) {
+                    render_topic(cur, p->blocks, seen);
+                }
+                memmove(p->blocks, p->blocks + seen, (unsigned)(p->nblocks - seen) * sizeof(block));
+                p->nblocks -= seen;
+                seen = 0;
+                done_some = 1;
+                next = book_heading(pi, &p->blocks[0]);
+                if (next < 0) {
+                    page_close();
+
+                    return -1;
+                }
+                render_complete(topics[next].parent);
+                cur = next;
+            }
+            if (cur >= 0) {
+                book_ids(pi, cur, &p->blocks[seen]);
+            }
+        }
+        if (done_some) {
+            keep_blocks(p->blocks, p->nblocks);
+        }
+    }
+    page_close();
+    if (got < 0) {
+        return -1;
+    }
+    if (!any) {
+        cur = book_top(pi, NULL);
+    }
+    if (cur >= 0) {
+        render_topic(cur, p->blocks, p->nblocks);
+    }
+    p->nblocks = 0;
+    free_all(&source_chunks);
+    render_complete(-1);
+    book_page_done(pi);
+
+    return 0;
 }
 
 int main(int argc, char** argv)
@@ -435,11 +485,16 @@ int main(int argc, char** argv)
         }
     }
 
-    ok = read_pages(ninputs, inputs) == 0
-         && STEP("outline") && outline() == 0 && book_done(title) == 0
-         && STEP("render") && render() == 0 && render_done() == 0
-         && STEP("index") && make_indexes() == 0
+    ok = read_pages(ninputs, inputs) == 0 && scratch_open(out) == 0;
+    for (i = 0; ok && i < npages; i++) {
+        STEP("pages");
+        ok = read_page(i) == 0;
+    }
+    ok = ok && md_errors == 0 && book_done(title) == 0 && render_done() == 0
+         && (number_topics(), 1)
+         && resolve_pending() == 0 && STEP("index") && (make_keys(), 1)
          && STEP("write") && write_book(out) == 0;
+    scratch_close();
     if (ok) {
         printf("md2ref: %s: %d pages, %d topics, %u keys, %u words\n", out, npages, ntopics,
                keys_section.count, words_section.count);

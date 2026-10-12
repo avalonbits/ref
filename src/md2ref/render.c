@@ -30,8 +30,6 @@
 #define MAX_COLS    32
 #define CELL_MAX    1024
 
-text* markup;
-unsigned view_size;
 
 /* The topic being rendered: grown as it needs, to TOPIC_MAX; and room to
  * compress it. */
@@ -41,16 +39,60 @@ static unsigned len;
 static uint8_t* packing;
 static unsigned packing_size;
 
+/* A link's placeholders in the topic being rendered: where, and which. */
+typedef struct {
+    unsigned pos;
+    int link;
+} mark;
+
+static mark* marks;
+static int nmarks;
+static int max_marks;
+static unsigned inline_at;          /* where put_inline's markup starts */
+
+/* In a table's cell, which is rendered to styled characters first: its
+ * placeholders, and the links they stand for, kept with the characters. */
+static int in_cell;
+static unsigned cell_pos[64];
+static int cell_link[64];
+static int ncell;
+static int cell_links[256];         /* the topic's: styled.link is 0x8000 | k */
+static int ncell_links;
+
+static void add_mark(unsigned pos, int link)
+{
+    if (nmarks == max_marks) {
+        max_marks = max_marks ? max_marks * 2 : 32;
+        marks = md_realloc(marks, (unsigned)max_marks * (unsigned)sizeof(mark));
+    }
+    marks[nmarks].pos = pos;
+    marks[nmarks].link = link;
+    nmarks++;
+}
+
+void markup_pending(int at)
+{
+    if (in_cell) {
+        if (ncell < 64) {
+            cell_pos[ncell] = (unsigned)at;
+            cell_link[ncell] = last_pending();
+            ncell++;
+        }
+    } else {
+        add_mark(inline_at + (unsigned)at, last_pending());
+    }
+}
+
+/* Room for need bytes: grown 4 KB at a time, as the largest topic sets it
+ * for the rest -- doubling would leave as much again unused. */
 static void room_for(unsigned need)
 {
-    unsigned more = cap ? cap : 4096;
+    unsigned more;
 
     if (need <= cap) {
         return;
     }
-    while (more < need) {
-        more *= 2;
-    }
+    more = (need + 4095) & ~4095u;
     if (more > TOPIC_MAX + 1) {
         more = TOPIC_MAX + 1;
     }
@@ -74,23 +116,21 @@ static void block_head(int kind, int space, int note, int a, int b)
     put(b > 255 ? 255 : b);
 }
 
-/* Inline Markdown's markup is about as long as its text: room for that, and
- * if it took more, more room and again -- quietly, as anything wrong in it
- * was said the first time. */
+/* Inline Markdown's markup is never longer than its text and a little: a
+ * link's target is three bytes for at least four of Markdown. Room for
+ * twice that. */
 static void put_inline(const page* p, int no, const char* s)
 {
     unsigned at = len < TOPIC_MAX ? len : TOPIC_MAX;
+    unsigned want = at + 2 * (unsigned)strlen(s) + 16;
     int n;
 
-    room_for(at + (unsigned)strlen(s) + 16);
+    room_for(want < TOPIC_MAX + 1 ? want : TOPIC_MAX + 1);
+    inline_at = at;
     n = inline_markup(p, no, s, buf + at, (int)(cap - at), resolve_link);
-    if (n > (int)(cap - at) && cap < TOPIC_MAX + 1) {
-        int quiet = md_quiet;
-
-        room_for(at + (unsigned)n);
-        md_quiet = 1;
-        n = inline_markup(p, no, s, buf + at, (int)(cap - at), resolve_link);
-        md_quiet = quiet;
+    if (n > (int)(cap - at)) {
+        n = (int)(cap - at);                /* only past TOPIC_MAX: too big, said below */
+        len = TOPIC_MAX + 1;
     }
     len += (unsigned)n;
 }
@@ -120,18 +160,22 @@ typedef struct {
 static cell styled_cell(const page* p, int no, const char* s, int slen)
 {
     static uint8_t m[CELL_MAX];
-    char* text = arena_strndup(s, (unsigned)slen);
-    int n = inline_markup(p, no, text, m, CELL_MAX, resolve_link);
+    char* text = source_strndup(s, (unsigned)slen);
+    int n;
     cell out;
     int em = 0;
     int code = 0;
     uint16_t link = NO_LINK;
     int k;
 
+    in_cell = 1;
+    ncell = 0;
+    n = inline_markup(p, no, text, m, CELL_MAX, resolve_link);
+    in_cell = 0;
     if (n > CELL_MAX) {
         n = CELL_MAX;
     }
-    out.c = arena_alloc((unsigned)(n + 1) * sizeof(styled));
+    out.c = source_alloc((unsigned)(n + 1) * sizeof(styled));
     out.n = 0;
     for (k = 0; k < n; k++) {
         int b = m[k];
@@ -141,7 +185,15 @@ static cell styled_cell(const page* p, int no, const char* s, int slen)
         } else if (b == CODE_ON || b == CODE_OFF) {
             code = b == CODE_ON;
         } else if (b == LINK && k + 2 < n) {
+            int j;
+
             link = (uint16_t)(m[k + 1] | m[k + 2] << 8);
+            for (j = 0; j < ncell; j++) {
+                if (cell_pos[j] == (unsigned)k + 1 && ncell_links < 256) {
+                    cell_links[ncell_links] = cell_link[j];
+                    link = (uint16_t)(0x8000 | ncell_links++);
+                }
+            }
             k += 2;
         } else if (b == LINK_END) {
             link = NO_LINK;
@@ -255,7 +307,12 @@ static void emit_styled(const cell* c, int from, int to, int force_em)
             if (link != NO_LINK) {
                 put(LINK_END);
             }
-            if (s->link != NO_LINK) {
+            if (s->link != NO_LINK && (s->link & 0x8000)) {
+                put(LINK);                  /* a placeholder, again */
+                add_mark(len, cell_links[s->link & 0x7FFF]);
+                put(NONE & 0xFF);
+                put(NONE >> 8);
+            } else if (s->link != NO_LINK) {
                 put(LINK);
                 put(s->link & 0xFF);
                 put(s->link >> 8);
@@ -305,16 +362,15 @@ static void table(const page* p, const block* b)
     for (r = 0; s[r]; r++) {
         nrows += s[r] == '\n';
     }
-    grid = arena_alloc((unsigned)(nrows * MAX_COLS + 1) * sizeof(cell));
+    /* As many columns as the first row has. */
+    ncols = split_row(s, (int)(strchr(s, '\n') - s), cells, lens, MAX_COLS);
+    grid = source_alloc((unsigned)(nrows * ncols + 1) * sizeof(cell));
     for (r = 0; r < nrows; r++) {
         const char* e = strchr(s, '\n');
         int n = split_row(s, (int)(e - s), cells, lens, MAX_COLS);
 
-        if (r == 0) {
-            ncols = n;
-        }
         for (c = 0; c < ncols; c++) {
-            grid[r * MAX_COLS + c] = c < n ? styled_cell(p, b->no + (r ? r + 1 : 0), cells[c], lens[c])
+            grid[r * ncols + c] = c < n ? styled_cell(p, b->no + (r ? r + 1 : 0), cells[c], lens[c])
                                            : styled_cell(p, b->no, "", 0);
         }
         s = e + 1;
@@ -327,8 +383,8 @@ static void table(const page* p, const block* b)
 
         natural[c] = 1;
         for (r = 0; r < nrows; r++) {
-            int w = widest_line(&grid[r * MAX_COLS + c]);
-            int lw = longest_word(&grid[r * MAX_COLS + c]);
+            int w = widest_line(&grid[r * ncols + c]);
+            int lw = longest_word(&grid[r * ncols + c]);
 
             if (w > natural[c]) {
                 natural[c] = w;
@@ -366,7 +422,7 @@ static void table(const page* p, const block* b)
     /* Any body row wrapped? Then rows are ruled apart. */
     for (r = 1; r < nrows; r++) {
         for (c = 0; c < ncols; c++) {
-            if (wrap_cell(&grid[r * MAX_COLS + c], widths[c], from[c], to[c], 64) > 1) {
+            if (wrap_cell(&grid[r * ncols + c], widths[c], from[c], to[c], 64) > 1) {
                 wrapped = 1;
             }
         }
@@ -392,7 +448,7 @@ static void table(const page* p, const block* b)
             put('\n');
         }
         for (c = 0; c < ncols; c++) {
-            nlines[c] = wrap_cell(&grid[r * MAX_COLS + c], widths[c], from[c], to[c], 64);
+            nlines[c] = wrap_cell(&grid[r * ncols + c], widths[c], from[c], to[c], 64);
             if (nlines[c] > height) {
                 height = nlines[c];
             }
@@ -413,7 +469,7 @@ static void table(const page* p, const block* b)
                     put(' ');
                 }
                 if (line < nlines[c]) {
-                    emit_styled(&grid[r * MAX_COLS + c], from[c][line], to[c][line], r == 0);
+                    emit_styled(&grid[r * ncols + c], from[c][line], to[c][line], r == 0);
                 }
                 pad = widths[c] - shown;
             }
@@ -476,46 +532,98 @@ static void one_block(const page* p, const block* b)
     put(END);
 }
 
-/* What is in buf kept as topic t's markup, compressed -- unless it is too
- * big. Compressed, the markup of a document fits the Agon. */
-static void keep(int t)
+/* --- topics, held until complete ------------------------------------------------- */
+
+#define DEPTH 9
+
+typedef struct {
+    int topic;
+    uint8_t* packed;
+    unsigned packed_len;
+    unsigned len;
+    mark* marks;            /* its placeholders: where in its markup, which link */
+    unsigned* at;           /* and where each is in packed */
+    int nmarks;
+} held;
+
+static held hold[DEPTH];
+static int nheld;
+
+unsigned view_size;
+unsigned max_packed;
+
+/* buf, len bytes of it, compressed into packing: its length. Placeholders
+ * stay literal, and fixed_at says where each landed. */
+static unsigned* fixed;
+static unsigned* fixed_at;
+static int max_fixed;
+
+static unsigned pack(const mark* m, int n)
 {
     unsigned room = len + len / 255 + 16;
-    unsigned n;
+    int k;
 
-    if (len > TOPIC_MAX) {
-        md_error(pages[topics[t].page].path, 0, "topic '%s' is too big (%u bytes, at most %u)",
-                 topics[t].title, len, (unsigned)TOPIC_MAX);
-        len = 0;
-    }
     if (room > packing_size) {
         packing_size = room;
         packing = md_realloc(packing, packing_size);
     }
-    n = lz4_compress(buf, len, packing, room);
-    markup[t].packed = arena_alloc(n);
-    memcpy(markup[t].packed, packing, n);
-    markup[t].packed_len = n;
-    markup[t].len = len;
+    if (n > max_fixed) {
+        max_fixed = n + 16;
+        fixed = md_realloc(fixed, (unsigned)max_fixed * (unsigned)sizeof(unsigned));
+        fixed_at = md_realloc(fixed_at, (unsigned)max_fixed * (unsigned)sizeof(unsigned));
+    }
+    for (k = 0; k < n; k++) {
+        fixed[k] = m[k].pos;
+    }
+
+    return lz4_compress(buf, len, packing, room, fixed, n, fixed_at);
 }
 
-void unpack(int t, uint8_t* out)
+/* The words of len bytes of buf from start. */
+static void take_words(int t, unsigned start, const char* title)
 {
-    ref_lz4(markup[t].packed, markup[t].packed_len, out, markup[t].len, NULL, 0);
+    char* plain = md_realloc(NULL, len - start + 2);
+
+    markup_plain(buf + start, len - start, plain, len - start + 2);
+    words_begin(t);
+    words_text(plain, 0);
+    if (title) {
+        words_text(title, 1);
+    }
+    words_end();
+    free(plain);
 }
 
-/* A topic's own markup: its heading, and its blocks. */
-static void render_topic(int t)
+static int too_big(int t)
 {
-    const topic* tp = &topics[t];
+    if (len > TOPIC_MAX) {
+        md_error(pages[topics[t].page].path, 0, "topic '%s' is too big (%u bytes, at most %u)",
+                 topics[t].title, len, (unsigned)TOPIC_MAX);
+        len = 0;
+        nmarks = 0;
+
+        return 1;
+    }
+
+    return 0;
+}
+
+void render_topic(int t, const block* b, int n)
+{
+    topic* tp = &topics[t];
     const page* p = &pages[tp->page];
-    arena_mark scratch = arena_here();      /* tables' cells, styled */
+    held* h;
+    unsigned packed;
     int k;
 
     len = 0;
+    nmarks = 0;
+    ncell_links = 0;
     block_head(B_HEAD, 1, 0, tp->level >= 1 ? (tp->level > 4 ? 4 : tp->level) : 1, 0);
     if (tp->heading) {
-        put_inline(p, p->blocks[tp->first_block - 1].no, tp->heading);
+        put_inline(p, b[0].no, tp->heading);
+        b++;
+        n--;
     } else {
         const char* s = tp->title;
 
@@ -524,106 +632,167 @@ static void render_topic(int t)
         }
     }
     put(END);
-    for (k = tp->first_block; k < tp->end_block; k++) {
-        one_block(p, &p->blocks[k]);
+    for (k = 0; k < n; k++) {
+        one_block(p, &b[k]);
     }
-    arena_back(scratch);
-    keep(t);
+    too_big(t);
+
+    /* Its size counts in its own and its ancestors', which are held. */
+    tp->own = len;
+    tp->total = len;
+    for (k = 0; k < nheld; k++) {
+        topics[hold[k].topic].total += len;
+        topics[hold[k].topic].descendants++;
+    }
+    take_words(t, 0, tp->title);
+
+    packed = pack(marks, nmarks);
+    h = &hold[nheld < DEPTH ? nheld++ : DEPTH - 1];
+    h->topic = t;
+    h->packed = md_realloc(NULL, packed + 1);
+    memcpy(h->packed, packing, packed);
+    h->packed_len = packed;
+    h->len = len;
+    h->nmarks = nmarks;
+    h->marks = NULL;
+    h->at = NULL;
+    if (nmarks) {
+        h->marks = md_realloc(NULL, (unsigned)nmarks * (unsigned)sizeof(mark));
+        memcpy(h->marks, marks, (unsigned)nmarks * sizeof(mark));
+        h->at = md_realloc(NULL, (unsigned)nmarks * (unsigned)sizeof(unsigned));
+        memcpy(h->at, fixed_at, (unsigned)nmarks * sizeof(unsigned));
+    }
 }
 
 /* Links to a topic's children, after its markup: for a topic too big to
  * show with them. */
 static void add_menu(int t)
 {
-    const topic* tp = &topics[t];
-    int k;
+    unsigned start = len;
+    int c;
 
-    len = 0;
-    room_for(markup[t].len + 1);
-    unpack(t, buf);
-    len = markup[t].len;
     block_head(B_PARA, 1, 0, 0, 0);
     put(EM_ON);
     put_ascii("In this section:");
     put(EM_OFF);
     put(END);
-    for (k = 0; k < tp->nchildren; k++) {
-        int c = tp->children[k];
+    for (c = topics[t].first_child; c >= 0; c = topics[c].next) {
         const char* s = topics[c].title;
 
-        block_head(B_PARA, k == 0, 0, 2, 4);
+        block_head(B_PARA, c == topics[t].first_child, 0, 2, 4);
         put_ascii("- ");
         put(LINK);
-        put(c & 0xFF);
-        put(c >> 8);
+        add_mark(len, LINK_TO(topics[c].made));    /* it may yet move up */
+        put(NONE & 0xFF);
+        put(NONE >> 8);
         while (*s) {
             put(agon_char(&s));
         }
         put(LINK_END);
         put(END);
     }
-    keep(t);
+    take_words(t, start, NULL);
 }
 
-void render_page(int pi)
+/* A held topic complete: links to its children if it is too big to show
+ * with them, and written, its placeholders where write_book patches them. */
+static void complete(held* h)
 {
-    const page* p = &pages[pi];
-    int t;
+    topic* tp = &topics[h->topic];
+    const uint8_t* text = h->packed;
+    unsigned packed = h->packed_len;
+    const unsigned* at = h->at;
+    unsigned long where;
+    int k;
 
-    if (!markup) {
-        markup = arena_alloc((unsigned)ntopics * sizeof(text));
+    tp->span = tp->total <= JOIN_LIMIT ? tp->descendants : 0;
+    len = h->len;
+    if (tp->span == 0 && tp->nchildren) {
+        room_for(len + 1);
+        ref_lz4(h->packed, h->packed_len, buf, len, NULL, 0);
+        nmarks = 0;
+        for (k = 0; k < h->nmarks; k++) {
+            add_mark(h->marks[k].pos, h->marks[k].link);
+        }
+        add_menu(h->topic);
+        if (!too_big(h->topic)) {
+            packed = pack(marks, nmarks);
+            text = packing;
+            at = fixed_at;
+            free(h->marks);
+            h->marks = md_realloc(NULL, (unsigned)(nmarks + 1) * (unsigned)sizeof(mark));
+            memcpy(h->marks, marks, (unsigned)nmarks * sizeof(mark));
+            h->nmarks = nmarks;
+        }
     }
-    for (t = p->first_topic; t < p->first_topic + p->ntopics; t++) {
-        render_topic(t);
+    if (packed > 0xFFFF) {
+        md_error(pages[tp->page].path, 0, "topic '%s' is too big", tp->title);
+    }
+    where = write_text(text, packed);
+    tp->text_at = where;
+    tp->packed = packed;
+    tp->len = len;
+    if (packed > max_packed) {
+        max_packed = packed;
+    }
+    for (k = 0; k < h->nmarks; k++) {
+        add_patch(where + at[k], h->marks[k].link);
+    }
+    free(h->packed);
+    free(h->marks);
+    free(h->at);
+}
+
+void render_top(int t)
+{
+    int held_now = nheld;
+    int k;
+
+    for (k = 0; k < nheld; k++) {
+        if (hold[k].topic >= t) {
+            hold[k].topic++;
+        }
+    }
+    /* Rendered -- its title alone -- into a place made beneath the rest,
+     * none of which it counts in, as they are its descendants; all the
+     * page has rendered counts in it. */
+    memmove(&hold[1], &hold[0], (unsigned)nheld * sizeof(held));
+    nheld = 0;
+    render_topic(t, NULL, 0);
+    nheld = held_now + 1;
+    for (k = t + 1; k < ntopics; k++) {
+        topics[t].total += topics[k].own;
+        topics[t].descendants++;
+    }
+}
+
+void render_complete(int parent)
+{
+    while (nheld > 0 && hold[nheld - 1].topic != parent) {
+        complete(&hold[--nheld]);
     }
 }
 
 int render_done(void)
 {
-    unsigned* total = md_realloc(NULL, (unsigned)ntopics * (unsigned)sizeof(unsigned));
-    int* descendants = md_realloc(NULL, (unsigned)ntopics * (unsigned)sizeof(int));
     int t;
 
-    /* Each subtree's size, children before parents (they come after them). */
-    for (t = 0; t < ntopics; t++) {
-        total[t] = markup[t].len;
-        descendants[t] = 0;
-    }
-    for (t = ntopics - 1; t >= 0; t--) {
-        int k;
-
-        for (k = 0; k < topics[t].nchildren; k++) {
-            int c = topics[t].children[k];
-
-            total[t] += total[c];
-            descendants[t] += descendants[c] + 1;
-        }
-    }
-    for (t = 0; t < ntopics; t++) {
-        topics[t].span = total[t] <= JOIN_LIMIT ? descendants[t] : 0;
-        if (topics[t].span == 0 && topics[t].nchildren) {
-            add_menu(t);
-        }
-    }
-    free(total);
-    free(descendants);
     free(buf);
     buf = NULL;
     cap = 0;
     free(packing);
     packing = NULL;
     packing_size = 0;
-
     view_size = 0;
     for (t = 0; t < ntopics; t++) {
-        unsigned v = 0;
+        unsigned long v = 0;
         int k;
 
         for (k = t; k <= t + topics[t].span; k++) {
-            v += markup[k].len;
+            v += topics[k].len;
         }
         if (v > view_size) {
-            view_size = v;
+            view_size = v > 0xFFFFFUL ? 0xFFFFF : (unsigned)v;
         }
     }
     if (view_size > 65535) {

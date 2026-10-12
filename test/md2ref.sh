@@ -2,7 +2,9 @@
 # md2ref on the Agon: bin/md2ref/md2ref.bin, run in a program's directory
 # as `md2ref myprog`, compiles the pages there into ref-doc/myprog.dat --
 # which must be byte for byte what the PC build writes from the same pages
-# -- and ref, run in ref-doc, lists it and finds topics in it. Then agon-docs' top-level pages, 105 KB
+# -- and ref, run in ref-doc, lists it and finds topics in it. Then all of
+# agon-docs, 637 KB of Markdown in one folder: md2ref reads a page through
+# a fixed window and holds only the outline, so it has to fit the Agon. Then agon-docs' top-level pages, 105 KB
 # of Markdown: what md2ref holds at once has to fit the Agon's memory.
 set -uo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -43,12 +45,13 @@ printf '%s\r\n' 'cd /proj' 'md2ref myprog' \
                 'cd /proj' 'md2ref -e listed.txt listed @pages.mdl' \
                 'Try md2ref -e errors.txt bad bad/link.md' 'cd /' > "$sd/autoexec.txt"
 if [ -n "$BIG" ]; then
-    mkdir -p "$sd/big"
-    cp "$BIG"/*.md "$sd/big/"
-    "$ROOT/out/host/md2ref" -w -o "$SCRATCH/big.dat" "$BIG" > /dev/null
+    mkdir -p "$sd/big" "$SCRATCH/big"
+    cp "$BIG"/*.md "$BIG"/*/*.md "$sd/big/"
+    cp "$BIG"/*.md "$BIG"/*/*.md "$SCRATCH/big/"
+    "$ROOT/out/host/md2ref" -w -o "$SCRATCH/big.dat" "$SCRATCH/big" > /dev/null
     printf '%s\r\n' 'md2ref -w -o /big.dat /big' >> "$sd/autoexec.txt"
 fi
-console=$(emu_run "$sd" 300)
+console=$(emu_run "$sd" 900)
 
 check "md2ref myprog on the Agon: reports what it wrote" \
       "$(grep -c '^md2ref: ref-doc/myprog.dat: 2 pages, 6 topics' <<< "$console")" 1
@@ -65,10 +68,10 @@ check "  an error goes in the file as on the console" \
 check "ref finds a topic in it by a code span" \
       "$(grep -c '^strtol, strtoul, strtoll$' <<< "$console")" 1
 if [ -n "$BIG" ]; then
-    check "md2ref on the Agon: 105 KB of agon-docs, as on the PC" \
+    check "md2ref on the Agon: all of agon-docs, as on the PC" \
           "$(md5sum < "$sd/big.dat" 2>/dev/null)" "$(md5sum < "$SCRATCH/big.dat")"
 else
-    echo "SKIP  md2ref on the Agon: 105 KB of agon-docs: no build/cache (make dat)"
+    echo "SKIP  md2ref on the Agon: all of agon-docs: no build/cache (make dat)"
 fi
 [ -n "${KEEP:-}" ] && cp "$sd/proj/ref-doc/myprog.dat" "$SCRATCH/pc.dat" "$KEEP/"
 [ $status = 0 ] || printf '%s\n' "$console" | tail -30

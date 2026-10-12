@@ -145,11 +145,13 @@ a code block never closed -- and writes nothing. Errors read
 `file:line: error: ...`, and md2ref returns 100, so an editor can go to the
 line. `-w` makes a link that leads nowhere a warning.
 
-On the Agon, md2ref reads the pages twice, one at a time, and holds only
-what it is making, compressed. agon-docs' 105 KB of top-level pages
-compile in 245 KB of memory, and each of its pages compiles on its own,
-the largest 96 KB; its 193 KB `mos/` folder, which has an 89 KB page, is
-more than fits.
+md2ref reads each page once, through a small window, as acc and zap read
+source, and writes each topic as soon as it is read: memory holds the
+outline -- titles, anchors, keys -- and one topic, however long the pages.
+All of agon-docs, 637 KB of Markdown, compiles on the Agon in 280 KB.
+While it works it keeps two or three scratch files beside the document
+(`<name>.dat~t`, `~w`, `~r`), and removes them when it is done. One block
+-- a code block, a table, a list -- can be up to 32 KB.
 
 ## Building
 

@@ -293,6 +293,17 @@ static void link(const char* s, int k, int label_end, int href, int href_len, in
     {
         int t = in_link ? -1 : resolve(cur_page, cur_no, s + href, href_len);
 
+        if (t == PENDING) {
+            /* The topic is not read yet: a placeholder, patched later. */
+            put(LINK);
+            markup_pending(written);
+            put(NONE & 0xFF);
+            put(NONE >> 8);
+            inlines(s + k + 1, label_end - k - 1, 1);
+            put(LINK_END);
+
+            return;
+        }
         if (t < 0) {
             inlines(s + k + 1, label_end - k - 1, in_link);
 

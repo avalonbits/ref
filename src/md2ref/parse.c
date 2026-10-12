@@ -18,7 +18,8 @@
 #include "md2ref.h"
 
 static page* pg;            /* the page being parsed */
-static int max_blocks;      /* room in its blocks */
+static block* shared;       /* its blocks, the same room for every page */
+static int max_blocks;
 
 /* --- lines --------------------------------------------------------------------- */
 
@@ -60,6 +61,22 @@ static int next_text(const line* L, int n, int i)
     }
 
     return i;
+}
+
+/* pat in the n bytes at s, or NULL: a line is not NUL-terminated, as it
+ * lies in page_next's window. */
+static const char* find(const char* s, int n, const char* pat)
+{
+    int m = (int)strlen(pat);
+    int k;
+
+    for (k = 0; k + m <= n; k++) {
+        if (memcmp(s + k, pat, (size_t)m) == 0) {
+            return s + k;
+        }
+    }
+
+    return NULL;
 }
 
 static int starts(const line* l, const char* s)
@@ -215,7 +232,7 @@ static int item(const line* l, int* ind, int* numbered, int* text_at)
 static int footnote(const line* l)
 {
     return indent_of(l) == 0 && starts(l, "[^") && memchr(l->text, ']', (size_t)l->len)
-           && strstr(l->text, "]:") != NULL;
+           && find(l->text, l->len, "]:") != NULL;
 }
 
 /* --- tables ---------------------------------------------------------------------- */
@@ -328,7 +345,8 @@ static void make_room(void)
 {
     if (pg->nblocks == max_blocks) {
         max_blocks = max_blocks ? max_blocks * 2 : 64;
-        pg->blocks = md_realloc(pg->blocks, (unsigned)max_blocks * (unsigned)sizeof(block));
+        shared = md_realloc(shared, (unsigned)max_blocks * (unsigned)sizeof(block));
+        pg->blocks = shared;
     }
 }
 
@@ -790,8 +808,9 @@ static NOINLINE int table_block(const line* L, int n, int i)
         const char* s = L[k].text;
         const char* c;
 
-        for (c = s; (c = strstr(c, "{#")) != NULL && c < s + L[k].len; c++) {
-            char* idt = source_strndup(c, (unsigned)(strcspn(c, "}") + 1));
+        for (c = s; (c = find(c, (int)(s + L[k].len - c), "{#")) != NULL; c++) {
+            const char* close = find(c, (int)(s + L[k].len - c), "}");
+            char* idt = source_strndup(c, (unsigned)(close ? close - c + 1 : s + L[k].len - c));
 
             cut_attrs(idt, (int)strlen(idt), &b->ids, &b->nids);
         }
@@ -919,24 +938,53 @@ static void parse(const line* L, int n, int indent, int in_note, int first_space
     }
 }
 
-void parse_page(page* p)
-{
-    int start = 0;
-    int k;
+/* --- for page_next: what a line is ------------------------------------------- */
 
+int line_blank(const line* l)
+{
+    return blank(l);
+}
+
+int line_indent(const line* l)
+{
+    return indent_of(l);
+}
+
+int line_item(const line* l)
+{
+    int ind;
+    int numbered;
+    int at;
+
+    return item(l, &ind, &numbered, &at) != 0;
+}
+
+int line_fence(const line* l, char* mark)
+{
+    return fence(l, mark);
+}
+
+/* Whether l closes a fence of len marks: as fenced_code closes one. */
+int line_closes(const line* l, int len, char mark)
+{
+    char m2;
+    int len2 = fence(l, &m2);
+    line rest = dedent(l, indent_of(l) + len2);
+
+    return len2 >= len && m2 == mark && blank(&rest);
+}
+
+/* --- a page ------------------------------------------------------------------- */
+
+void parse_begin(page* p)
+{
     pg = p;
-    p->blocks = NULL;           /* grown as it needs, then kept at its size */
+    p->blocks = shared;
     p->nblocks = 0;
-    max_blocks = 0;
-    /* Front matter: --- lines at the very top. */
-    if (p->nlines && p->lines[0].len >= 3 && starts(&p->lines[0], "---")) {
-        for (k = 1; k < p->nlines; k++) {
-            if (starts(&p->lines[k], "---")) {
-                start = k + 1;
-                break;
-            }
-        }
-    }
-    parse(p->lines + start, p->nlines - start, 0, 0, 1);
-    p->blocks = md_realloc(p->blocks, (unsigned)(p->nblocks + 1) * (unsigned)sizeof(block));
+}
+
+void parse_run(page* p, const line* L, int n)
+{
+    pg = p;
+    parse(L, n, 0, 0, 1);
 }
