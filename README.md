@@ -37,7 +37,10 @@ specified in [docs/FORMAT.md](docs/FORMAT.md), with any tool.
     ref <doc> -s <words>    search the text
     ref -p ...              print instead of showing: what was found, or,
                             alone, the documents with their titles
-    ref -f <file> ...       a document by its path instead of its name
+    ref -f <file> ...       a document by its path instead of its name; a
+                            <doc> with a / or ending .dat is a path too
+    ref <a>,<b>,... <query> the first of the documents with an answer;
+                            ones that are missing are passed over
     ref -v [doc]            ref's version, and a document's source
 
 In `mos`, a lookup knows:
@@ -99,8 +102,8 @@ ref uses the screen mode and font already in use; under hub, the prompt's.
 
 md2ref compiles Markdown pages into a document, on the Agon or on a PC:
 
-    md2ref <name> [<dir> | <page.md>...]
-    md2ref -o <file.dat> <dir> | <page.md>...
+    md2ref <name> [<dir> | <page.md>... | @list]
+    md2ref -o <file.dat> <dir> | <page.md>... | @list
 
 `md2ref myprog` writes `ref-doc/myprog.dat`, making `ref-doc` if it is not
 there, from the `.md` files in the current directory. Name a directory or
@@ -110,11 +113,15 @@ order given. The name is the one ref will know it by: one to eight
 lower-case letters and digits. `-o` writes the document anywhere else,
 such as `/config/ref/docs/myprog.dat` to install it for everyone.
 
-`-t` sets the title (else the first page's first heading), and `-w` makes
-a link that leads nowhere a warning instead of an error.
+`@list` reads the pages' paths from a file, one a line, for more than a
+command line holds. `-t` sets the title (else the first page's first
+heading), `-w` makes a link that leads nowhere a warning instead of an
+error, and `-e <file>` writes the errors and warnings to that file as well
+as the console -- the file is made even when there are none.
 
 ade compiles a program's Markdown, wherever it is, into the program's
-`ref-doc/`; `ref myprog`, run in `ref-doc/`, reads it.
+`ref-doc/`; `ref myprog`, run in `ref-doc/`, reads it, and
+`ref ref-doc/myprog.dat,mos -k <word>` asks it first and mos after.
 
 - **Topics** are the headings, nested by level. A page that opens with its
   only `#` heading is that topic; otherwise the page is a topic titled

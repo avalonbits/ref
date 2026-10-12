@@ -143,6 +143,33 @@ check "  elsewhere, zap is the one installed" \
       "$(grep -aE '^zap ' <<< "$out" | tail -1 | tr -s ' ')" \
       "zap Community Agon Platform documentation"
 
+# --- several documents, the first with an answer winning, as ade's F1
+# asks the program's own and then acc or mos; a path is a document too ---
+sd=$(emu_card "$RELEASE")
+mkdir -p "$sd/proj/ref-doc"
+"$ROOT/out/host/md2ref" -o "$sd/proj/ref-doc/myprog.dat" "$ROOT/build/tests/md2ref/doc" > /dev/null
+cp "$sd/proj/ref-doc/myprog.dat" "$sd/proj/ref-doc/myprog.doc"
+{
+    printf 'cd /proj/ref-doc\r\nref myprog.dat -p -k strtoll\r\ncd /\r\n'
+    printf 'ref /proj/ref-doc/myprog.doc -p -k vdu 23,0,&a0\r\n'
+    printf 'Try ref /proj/ref-doc/myprog.dat -p -k strtoul\r\nShow Try$ReturnCode\r\n'
+    printf 'Try ref -p /proj/ref-doc/myprog.dat,mos -k frob(int x)\r\nShow Try$ReturnCode\r\n'
+    printf 'Try ref -p /proj/ref-doc/myprog.dat,mos -k mos_fopen\r\nShow Try$ReturnCode\r\n'
+    printf 'Try ref -p /none/x.dat,nosuch,mos -k mos_fopen\r\nShow Try$ReturnCode\r\n'
+    printf 'Try ref -p /proj/ref-doc/myprog.dat,mos -k xyzzy\r\nShow Try$ReturnCode\r\n'
+} > "$sd/autoexec.txt"
+out=$(emu_run "$sd" 60)
+rm -rf "$sd"
+# The strtol topic shows its child, the VDU one, so that comes three times.
+check "ref <path> reads a document by its path: x.dat, a/b.dat, a/b" \
+      "$(grep -ac '^strtol, strtoul, strtoll$' <<< "$out") $(grep -ac '^VDU 23, 0, &A0, n: Buffered$' <<< "$out")" "2 3"
+check "ref a,b: the first with the key answers" "$(grep -ac '^frob(int x)$' <<< "$out")" 1
+check "  else the next: mos_fopen from mos, twice, missing ones passed over" \
+      "$(grep -ac '^0x0A: mos_fopen$' <<< "$out")" 2
+check "  nothing in any: says so" "$(has "$out" 'ref: nothing for xyzzy')" yes
+check "  0, 0, 0, 0, then 100" \
+      "$(grep -a 'Try$ReturnCode' <<< "$out" | grep -oE '[0-9]+$' | tr '\n' ' ')" "0 0 0 0 100 "
+
 sd=$(emu_card "$SCRIPTED")
 cp "$sd/config/ref/docs/mos.dat" "$sd/config/ref/docs/zap.dat"
 printf 'ref\r\n' > "$sd/autoexec.txt"

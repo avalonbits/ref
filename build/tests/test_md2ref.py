@@ -144,6 +144,44 @@ class Md2ref(unittest.TestCase):
                 self.assertIn("is not a document's name", p.stdout)
                 self.assertFalse(os.path.exists(os.path.join(d, 'ref-doc')))
 
+    def test_at_list_names_the_pages(self):
+        # One a line, in order; \r\n and blank lines as an editor may leave.
+        with tempfile.TemporaryDirectory() as d:
+            lst = os.path.join(d, 'pages.mdl')
+            with open(lst, 'w', newline='') as f:
+                f.write('doc/index.md\r\n\r\ndoc/api.md  \r\n')
+            self.assertEqual(compile_doc('@' + lst), compile_doc('doc'))
+
+    def test_at_list_that_cannot_be_read(self):
+        p = md2ref('-o', os.devnull, '@nosuch.mdl')
+        self.assertEqual(p.returncode, FAILED)
+        self.assertEqual(p.stdout, 'nosuch.mdl: error: cannot be read\n')
+
+    def test_e_writes_the_errors_to_a_file_too(self):
+        with tempfile.TemporaryDirectory() as d:
+            errs = os.path.join(d, 'errs.txt')
+            p = md2ref('-e', errs, '-o', os.path.join(d, 'x.dat'), os.path.join('bad', 'link.md'))
+            self.assertEqual(p.returncode, FAILED)
+            with open(errs) as f:
+                self.assertEqual(f.read(), p.stdout)
+            self.assertEqual(p.stdout,
+                             "bad/link.md:5: error: cannot resolve link 'missing.md#here'\n")
+
+    def test_e_file_holds_warnings_and_is_made_when_all_is_well(self):
+        with tempfile.TemporaryDirectory() as d:
+            errs = os.path.join(d, 'errs.txt')
+            with open(errs, 'w') as f:
+                f.write('stale\n')
+            p = md2ref('-e', errs, '-w', '-o', os.path.join(d, 'x.dat'),
+                       os.path.join('bad', 'link.md'))
+            self.assertEqual(p.returncode, 0)
+            with open(errs) as f:
+                self.assertEqual(f.read(),
+                                 "bad/link.md:5: warning: cannot resolve link 'missing.md#here'\n")
+            md2ref('-e', errs, '-o', os.path.join(d, 'x.dat'), 'doc')
+            with open(errs) as f:
+                self.assertEqual(f.read(), '')
+
     def test_usage(self):
         for args in ((), ('-o', 'x.dat'), ('-q', '-o', 'x.dat', 'doc')):
             with self.subTest(args=args):

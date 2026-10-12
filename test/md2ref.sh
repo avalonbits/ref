@@ -35,8 +35,13 @@ sd=$(emu_card)
 cp "$ROOT/bin/md2ref/md2ref.bin" "$sd/bin/"
 mkdir -p "$sd/proj"
 cp "$DOC"/*.md "$sd/proj/"
+mkdir -p "$sd/proj/bad"
+cp "$ROOT/build/tests/md2ref/bad/link.md" "$sd/proj/bad/"
+printf 'index.md\r\napi.md\r\n' > "$sd/proj/pages.mdl"
 printf '%s\r\n' 'cd /proj' 'md2ref myprog' \
-                'cd ref-doc' 'ref -p' 'ref -p myprog -k strtoul' > "$sd/autoexec.txt"
+                'cd ref-doc' 'ref -p' 'ref -p myprog -k strtoul' \
+                'cd /proj' 'md2ref -e listed.txt listed @pages.mdl' \
+                'Try md2ref -e errors.txt bad bad/link.md' 'cd /' > "$sd/autoexec.txt"
 if [ -n "$BIG" ]; then
     mkdir -p "$sd/big"
     cp "$BIG"/*.md "$sd/big/"
@@ -51,6 +56,12 @@ check "md2ref on the Agon: the document, byte for byte as on the PC" \
       "$(md5sum < "$sd/proj/ref-doc/myprog.dat" 2>/dev/null)" "$(md5sum < "$SCRATCH/pc.dat")"
 check "ref, in ref-doc, lists the new document" \
       "$(grep -cE '^myprog +\. My Program' <<< "$console")" 1
+check "md2ref -e @list on the Agon: the same document, and no errors in the file" \
+      "$(md5sum < "$sd/proj/ref-doc/listed.dat" 2>/dev/null) $(wc -c < "$sd/proj/listed.txt" 2>/dev/null)" \
+      "$(md5sum < "$SCRATCH/pc.dat") 0"
+check "  an error goes in the file as on the console" \
+      "$(tr -d '\r' < "$sd/proj/errors.txt" 2>/dev/null)" \
+      "bad/link.md:5: error: cannot resolve link 'missing.md#here'"
 check "ref finds a topic in it by a code span" \
       "$(grep -c '^strtol, strtoul, strtoll$' <<< "$console")" 1
 if [ -n "$BIG" ]; then

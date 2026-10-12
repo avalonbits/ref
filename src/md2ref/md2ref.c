@@ -10,6 +10,10 @@
  *   -o      the document to write instead, anywhere
  *   -t      its title (else the first page's first heading)
  *   -w      a link that leads nowhere is a warning, not an error
+ *   -e      errors and warnings into this file too, which is made even
+ *           when there are none: ade reads it after a build
+ *   @list   the pages named in this file, one a line: a build.obey line
+ *           is too short for many
  *
  * Errors are reported as file:line: error: ..., and md2ref then writes
  * nothing and returns 100 -- as acc and zap do with -e, so an editor can
@@ -36,6 +40,8 @@
 int md_errors;
 int md_keep_going;
 int md_quiet;
+
+static FILE* errors;        /* -e */
 
 /* --- the arenas: chunks, each used from its start ------------------------------- */
 
@@ -65,6 +71,10 @@ void* md_realloc(void* p, unsigned n)
     p = realloc(p, n);
     if (!p) {
         printf("md2ref: error: out of memory\n");
+        if (errors) {
+            fprintf(errors, "md2ref: error: out of memory\n");
+            fclose(errors);
+        }
 #ifdef ZMALLOC
         z_report();
 #endif
@@ -196,40 +206,85 @@ void drop_source(void)
 
 /* --- errors ------------------------------------------------------------------------ */
 
-static void report(const char* what, const char* file, int no, const char* fmt, va_list ap)
+/* file:line: what: message, on the console and, with -e, in the file. */
+static void report(const char* what, const char* file, int no, const char* message)
 {
+    static char where[300];
+
     if (no > 0) {
-        printf("%s:%d: %s: ", file, no, what);
+        snprintf(where, sizeof where, "%s:%d: %s: ", file, no, what);
     } else {
-        printf("%s: %s: ", file, what);
+        snprintf(where, sizeof where, "%s: %s: ", file, what);
     }
-    vprintf(fmt, ap);
-    printf("\n");
+    printf("%s%s\n", where, message);
+    if (errors) {
+        fprintf(errors, "%s%s\n", where, message);
+    }
 }
 
 void md_error(const char* file, int no, const char* fmt, ...)
 {
+    static char message[300];
     va_list ap;
 
     if (md_quiet) {
         return;
     }
     va_start(ap, fmt);
-    report("error", file, no, fmt, ap);
+    vsnprintf(message, sizeof message, fmt, ap);
     va_end(ap);
+    report("error", file, no, message);
     md_errors++;
 }
 
 void md_warn(const char* file, int no, const char* fmt, ...)
 {
+    static char message[300];
     va_list ap;
 
     if (md_quiet) {
         return;
     }
     va_start(ap, fmt);
-    report("warning", file, no, fmt, ap);
+    vsnprintf(message, sizeof message, fmt, ap);
     va_end(ap);
+    report("warning", file, no, message);
+}
+
+/* @list: each line a page, into inputs (up to max). 0, or -1. */
+static int read_list(const char* path, char** inputs, int* n, int max)
+{
+    static char line[256];
+    FILE* f = fopen(path, "r");
+    int no = 0;
+
+    if (!f) {
+        md_error(path, 0, "cannot be read");
+
+        return -1;
+    }
+    while (fgets(line, sizeof line, f)) {
+        int len = (int)strlen(line);
+
+        no++;
+        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'
+                           || line[len - 1] == ' ' || line[len - 1] == '\t')) {
+            line[--len] = 0;
+        }
+        if (len == 0) {
+            continue;
+        }
+        if (*n >= max) {
+            md_error(path, no, "too many pages (at most %d)", max);
+            fclose(f);
+
+            return -1;
+        }
+        inputs[(*n)++] = arena_strdup(line);
+    }
+    fclose(f);
+
+    return 0;
 }
 
 /* --- the steps ------------------------------------------------------------------- */
@@ -279,10 +334,10 @@ static int render(void)
 
 static int usage(void)
 {
-    printf("usage: md2ref [-t <title>] [-w] <name> [<dir> | <page.md>...]\n"
-           "       md2ref [-t <title>] [-w] -o <file.dat> <dir> | <page.md>...\n"
+    printf("usage: md2ref [-t <title>] [-w] [-e <file>] <name> [<dir> | <page.md>... | @list]\n"
+           "       md2ref [-t <title>] [-w] [-e <file>] -o <file.dat> <dir> | <page.md>... | @list\n"
            "  <name> writes " DOC_DIR "/<name>.dat, from the current directory's pages\n"
-           "  if none are given\n");
+           "  if none are given; @list names the pages in a file, one a line\n");
 
     return FAILED;
 }
@@ -309,6 +364,7 @@ int main(int argc, char** argv)
     static char named[sizeof DOC_DIR + 16];
     const char* out = NULL;
     const char* title = NULL;
+    const char* error_file = NULL;
     int ninputs = 0;
     int i;
     int ok;
@@ -320,10 +376,20 @@ int main(int argc, char** argv)
             title = argv[++i];
         } else if (strcmp(argv[i], "-w") == 0) {
             md_keep_going = 1;
+        } else if (strcmp(argv[i], "-e") == 0 && i + 1 < argc) {
+            error_file = argv[++i];
         } else if (argv[i][0] == '-') {
             return usage();
         } else if (ninputs < 64) {
             inputs[ninputs++] = argv[i];
+        }
+    }
+    if (error_file) {
+        errors = fopen(error_file, "w");
+        if (!errors) {
+            printf("%s: error: cannot be written\n", error_file);
+
+            return FAILED;
         }
     }
     if (!out) {
@@ -332,8 +398,11 @@ int main(int argc, char** argv)
             return usage();
         }
         if (!valid_name(inputs[0])) {
-            printf("md2ref: error: '%.40s' is not a document's name: one to eight lower-case\n"
-                   "letters and digits (or give -o <file.dat>)\n", inputs[0]);
+            md_error("md2ref", 0, "'%.40s' is not a document's name: one to eight lower-case"
+                     " letters and digits (or give -o <file.dat>)", inputs[0]);
+            if (errors) {
+                fclose(errors);
+            }
 
             return FAILED;
         }
@@ -348,6 +417,23 @@ int main(int argc, char** argv)
     } else if (ninputs == 0) {
         return usage();
     }
+    /* @list: the pages it names, in its place. */
+    if (ninputs == 1 && inputs[0][0] == '@') {
+        const char* list = inputs[0] + 1;
+
+        ninputs = 0;
+        if (read_list(list, inputs, &ninputs, 64) != 0 || ninputs == 0) {
+            if (ninputs == 0 && md_errors == 0) {
+                md_error(list, 0, "names no pages");
+            }
+            if (errors) {
+                fclose(errors);
+            }
+            free_all(&book_chunks);
+
+            return FAILED;
+        }
+    }
 
     ok = read_pages(ninputs, inputs) == 0
          && STEP("outline") && outline() == 0 && book_done(title) == 0
@@ -357,6 +443,9 @@ int main(int argc, char** argv)
     if (ok) {
         printf("md2ref: %s: %d pages, %d topics, %u keys, %u words\n", out, npages, ntopics,
                keys_section.count, words_section.count);
+    }
+    if (errors) {
+        fclose(errors);
     }
     free_all(&book_chunks);
     free_all(&source_chunks);

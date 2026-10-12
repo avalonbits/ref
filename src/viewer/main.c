@@ -8,7 +8,11 @@
  *   ref <doc> <query>       a key lookup, then a search if nothing matches
  *   ref <doc> -k <query>    the key lookup only: what ade's F1 runs
  *   ref <doc> -s <words>    the full-text search
- *   ref -f <file> ...       a document by its path, instead of its name
+ *   ref -f <file> ...       a document by its path, instead of its name;
+ *                           <doc> with a / or ending .dat is a path too
+ *   ref <a>,<b>,... <query> the first of the documents that has an answer,
+ *                           missing ones passed over: ade's F1 asks the
+ *                           program's own document, then acc's or mos
  *   ref -p ...              print what was found instead of showing it;
  *                           ref -p alone prints the documents
  *   ref <doc> -T [query]    time a lookup, a search and the largest topic
@@ -108,7 +112,7 @@ static int parse(int argc, char** argv)
         } else if (strcmp(a, "-f") == 0 && i + 1 < argc) {
             opt.path = argv[++i];
         } else if (strcmp(a, "-h") == 0 || strcmp(a, "--help") == 0) {
-            ui_print("usage: ref [<doc> [-k | -s] [query]] [-p] [-v] [-f file]\n");
+            ui_print("usage: ref [<doc>[,<doc>...] [-k | -s] [query]] [-p] [-v] [-f file]\n");
 
             return 1;
         } else if (!opt.name && !opt.path) {
@@ -124,7 +128,9 @@ static int parse(int argc, char** argv)
     return 0;
 }
 
-static int open_book(void)
+/* opt.path opened as the book; quietly, -1 if it cannot be, for a list's
+ * documents, which may be missing. */
+static int open_book_as(int quiet)
 {
     int e;
 
@@ -132,6 +138,9 @@ static int open_book(void)
     z_site = "ref_open: tables, buffers";
 #endif
     e = ref_open(&book, opt.path);
+    if (e != REF_OK && quiet) {
+        return -1;
+    }
     if (e == REF_ENOFILE && opt.name) {
         sprintf(line, "ref: no document %.20s; ref lists them\n", opt.name);
         ui_print(line);
@@ -162,9 +171,14 @@ static int open_book(void)
     return 0;
 }
 
+static int open_book(void)
+{
+    return open_book_as(0);
+}
+
 /* Look the query up -- then, unless -k, search for it if no key matches.
  * 0, or -1 if nothing was found (and ref said so). */
-static int look_up(void)
+static int look_up_as(int quiet)
 {
     kind = REF_LOOK_NONE;
     count = 0;
@@ -183,13 +197,70 @@ static int look_up(void)
         }
     }
     if (count == 0) {
-        sprintf(line, "ref: nothing for %.60s\n", opt.query);
-        ui_print(line);
+        if (!quiet) {
+            sprintf(line, "ref: nothing for %.60s\n", opt.query);
+            ui_print(line);
+        }
 
         return -1;
     }
 
     return 0;
+}
+
+static int look_up(void)
+{
+    return look_up_as(0);
+}
+
+/* A document word: a path if it has a / or ends in .dat, else a name. */
+static void take_document(const char* word)
+{
+    static char path[64];
+    int n = (int)strlen(word);
+
+    if (strchr(word, '/') || (n > 4 && strcmp(word + n - 4, ".dat") == 0)) {
+        snprintf(path, sizeof path, "%s", word);
+        opt.name = NULL;
+        opt.path = path;
+    } else {
+        opt.name = word;
+        opt.path = shelf_valid_name(word) ? shelf_path(word) : NULL;
+    }
+}
+
+/* ref a,b,c [query]: the first of the documents that has what is asked
+ * for -- or, with no query, the first there is. One that is missing, or
+ * no document, is passed over. 0 with the book open and the query looked
+ * up, or -1. */
+static int first_with(char* list)
+{
+    char* word = list;
+
+    while (word) {
+        char* comma = strchr(word, ',');
+
+        if (comma) {
+            *comma = 0;
+        }
+        take_document(word);
+        if (opt.path && open_book_as(1) == 0) {
+            if (!opt.query[0] || look_up_as(1) == 0) {
+                return 0;
+            }
+            ref_close(&book);
+            titles = NULL;
+        }
+        word = comma ? comma + 1 : NULL;
+    }
+    if (opt.query[0]) {
+        sprintf(line, "ref: nothing for %.60s\n", opt.query);
+    } else {
+        sprintf(line, "ref: none of those is a document\n");
+    }
+    ui_print(line);
+
+    return -1;
 }
 
 /* One topic found, rather than several to choose from. */
@@ -282,6 +353,7 @@ static int browse(void)
 static int run(int argc, char** argv)
 {
     int result = 0;
+    int looked = 0;             /* a list's document was chosen by its answer */
 
     if (parse(argc, argv)) {
         return 0;
@@ -303,17 +375,27 @@ static int run(int argc, char** argv)
 
         return browse();
     }
-    if (opt.name && !shelf_valid_name(opt.name)) {
-        sprintf(line, "ref: %.20s is not a document's name; ref lists them\n", opt.name);
-        ui_print(line);
+    if (opt.name && !opt.path && strchr(opt.name, ',')) {
+        static char list[QUERY + 1];
 
-        return NOTHING;
-    }
-    if (!opt.path) {
-        opt.path = shelf_path(opt.name);
-    }
-    if (open_book() != 0) {
-        return NOTHING;
+        snprintf(list, sizeof list, "%s", opt.name);
+        if (first_with(list) != 0) {
+            return NOTHING;
+        }
+        looked = 1;
+    } else {
+        if (opt.name && !opt.path) {
+            take_document(opt.name);
+        }
+        if (opt.name && !opt.path) {
+            sprintf(line, "ref: %.20s is not a document's name; ref lists them\n", opt.name);
+            ui_print(line);
+
+            return NOTHING;
+        }
+        if (open_book() != 0) {
+            return NOTHING;
+        }
     }
     if (opt.version) {
         sprintf(line, "ref %s, %s: %s (%s)\n", REF_VERSION, opt.name ? opt.name : opt.path,
@@ -324,7 +406,7 @@ static int run(int argc, char** argv)
     } else if (opt.print && !opt.query[0]) {
         ui_print("ref: -p needs a query\n");
         result = NOTHING;
-    } else if (opt.query[0] && look_up() != 0) {
+    } else if (opt.query[0] && !looked && look_up() != 0) {
         result = NOTHING;
     } else if (opt.print) {
         print_found();
