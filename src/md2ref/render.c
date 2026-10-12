@@ -582,16 +582,12 @@ static unsigned pack(const mark* m, int n)
 /* The words of len bytes of buf from start. */
 static void take_words(int t, unsigned start, const char* title)
 {
-    char* plain = md_realloc(NULL, len - start + 2);
-
-    markup_plain(buf + start, len - start, plain, len - start + 2);
     words_begin(t);
-    words_text(plain, 0);
+    words_markup(buf + start, len - start);
     if (title) {
         words_text(title, 1);
     }
     words_end();
-    free(plain);
 }
 
 static int too_big(int t)
@@ -802,33 +798,4 @@ int render_done(void)
     }
 
     return md_errors ? -1 : 0;
-}
-
-unsigned markup_plain(const uint8_t* m, unsigned n, char* out, unsigned size)
-{
-    unsigned k = 0;
-    unsigned o = 0;
-
-    while (k < n && o + 1 < size) {
-        k += 3;                             /* the block's head */
-        while (k < n && m[k] != END && o + 1 < size) {
-            uint8_t c = m[k];
-
-            if (c == LINK) {
-                k += 3;
-                continue;
-            }
-            if (c == BREAK) {
-                out[o++] = ' ';
-            } else if (c >= 0x20 || c == '\n') {
-                out[o++] = (char)c;
-            }
-            k++;
-        }
-        k++;
-        out[o++] = '\n';
-    }
-    out[o] = 0;
-
-    return o;
 }

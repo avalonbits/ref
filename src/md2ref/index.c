@@ -575,6 +575,61 @@ void words_text(const char* plain, int in_title)
     each_word(plain, 3, text_word, (int)word_topic, in_title);
 }
 
+/* The words of a topic's markup, read as it is: blocks, each a three-byte
+ * head and its text to an END. The words are the ones its plain text
+ * would give -- a LINK and its topic, and the other codes but a BREAK, a
+ * newline and the END, are left out and what is either side joins up --
+ * without making the plain text first. */
+void words_markup(const uint8_t* m, unsigned n)
+{
+    static uint8_t w[WORD_MAX + 1];
+    const uint8_t* s = m;
+    const uint8_t* e = m + n;
+
+    if (!word_char['a']) {
+        make_tables();
+    }
+    while (s < e) {
+        s += 3;                             /* the block's head */
+        for (;;) {
+            uint8_t* o = w;
+            uint8_t kind = 0;
+            uint8_t c;
+            int len;
+
+            while (!word_char[*s]) {
+                if (*s == REF_END || s >= e) {
+                    goto next_block;
+                }
+                s += *s == REF_LINK ? 3 : 1;
+            }
+            for (;;) {
+                uint8_t b = *s;
+
+                if ((c = word_char[b]) != 0) {
+                    if (o < w + WORD_MAX) {
+                        *o++ = c;
+                    }
+                    kind |= word_kind[b];
+                    s++;
+                } else if (b == REF_LINK) {
+                    s += 3;
+                } else if (b < 0x20 && b != REF_END && b != REF_BREAK && b != '\n') {
+                    s++;
+                } else {
+                    break;
+                }
+            }
+            len = (int)(o - w);
+            if (len >= 3 && kind == (NOT_DIGIT | REAL) && !is_stop((const char*)w, len)) {
+                text_word((const char*)w, len, (int)word_topic, 0);
+            }
+        }
+next_block:
+        s++;                                /* the END */
+    }
+}
+
 void words_end(void)
 {
     words_put(wbuf, wlen);

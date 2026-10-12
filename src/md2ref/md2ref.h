@@ -248,8 +248,6 @@ void number_topics(void);
 int render_done(void);
 /* Where in the markup being rendered a link's placeholder is. */
 void markup_pending(int at);
-/* Markup's plain text, controls dropped, lines ended by '\n'. */
-unsigned markup_plain(const uint8_t* m, unsigned len, char* out, unsigned size);
 /* Text into the Agon's character set, from UTF-8: into out. */
 int agon_char(const char** s);
 
@@ -261,6 +259,8 @@ extern unsigned max_packed;
 /* A topic's words, from its markup's plain text (and in_title, its title's):
  * between words_begin and words_end, for each topic, or more of one. */
 void words_begin(int t);
+/* The words of a topic's markup, n bytes of whole blocks. */
+void words_markup(const uint8_t* m, unsigned n);
 void words_text(const char* plain, int in_title);
 void words_end(void);
 /* The keys, from every topic's heading and title. */

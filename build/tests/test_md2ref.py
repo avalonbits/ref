@@ -419,6 +419,15 @@ class Md2ref(unittest.TestCase):
         self.assertGreater(len(page), 120000)
         self.assertLess(len(data), len(page) // 3)
 
+    def test_words_from_the_markup(self):
+        # The words are read from the markup as its plain text would give
+        # them: a code span's marks and a link's join what is either side
+        # (foobar, ablnkok), and a line break parts them (one, two).
+        p, data, left = compile_pages({'index.md': '# Tee\n\nfoo`bar` ab[lnk](#tee)ok one<br>two\n'})
+        self.assertEqual(p.returncode, 0, p.stdout)
+        self.assertEqual(ask(data, 'search', ['foobar', 'ablnkok', 'one', 'two', 'onetwo']).splitlines(),
+                         ['1 0:0:1', '1 0:0:1', '1 0:0:1', '1 0:0:1', '0'])
+
     def test_words_past_one_run(self):
         # More words than one 16 KB run of the words file holds: sorted in
         # runs, merged, every word still finds its topic.
