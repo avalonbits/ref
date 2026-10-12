@@ -520,6 +520,15 @@ class Md2ref(unittest.TestCase):
         self.assertEqual(text.count(b'\x14'), 300)
         self.assertNotIn(b'\x14\xff\xff', text)
 
+    def test_keys_on_a_page_given_a_top_later(self):
+        # Keys are written as each topic is made, by its number as made, and
+        # read back by its number at the end: here b's top is made after
+        # frob, and comes before it.
+        p, data, left = compile_pages({'a.md': '# A\n\ntext\n',
+                                       'b.md': '# B1\n\ntext\n\n## `frob`\n\ntext\n\n# B2\n\ntext\n'})
+        self.assertEqual(p.returncode, 0, p.stdout)
+        self.assertEqual(ask(data, 'lookup', ['frob']).split(' |')[0], '1 1 3')
+
     def test_words_past_one_run(self):
         # More words than one 16 KB run of the words file holds: sorted in
         # runs, merged, every word still finds its topic.

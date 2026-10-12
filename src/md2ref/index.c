@@ -362,12 +362,34 @@ static void key_blocks(section* s)
 
 /* --- keys --------------------------------------------------------------------------- */
 
+/* The keys go to the keys file as each topic is made -- a record each, its
+ * length, the key and the topic's number as made -- and are read back at
+ * the end: so a heading's Markdown is not kept to the end for them, as a
+ * topic's text is not. */
+static int key_made;                    /* the topic whose keys these are, as made */
+
+static void put_key(const char* key, int len)
+{
+    uint8_t r[3];
+
+    if (len <= 0 || len > WORD_MAX) {
+        return;
+    }
+    r[0] = (uint8_t)len;
+    r[1] = (uint8_t)(key_made & 0xFF);
+    r[2] = (uint8_t)((unsigned)key_made >> 8);
+    keys_put(r, 1);
+    keys_put((const uint8_t*)key, (unsigned)len);
+    keys_put(r + 1, 2);
+}
+
 static void add_key(const char* text, int topic)
 {
     static char norm[REF_KEY_MAX + 1];
     int n = ref_normalize(&settings, text, norm);
 
-    add_entry(norm, n, topic, 0);
+    (void)topic;
+    put_key(norm, n);
 }
 
 /* The key a VDU sequence gives: normalised, cut at its first named
@@ -464,35 +486,64 @@ static void title_word(const char* w, int len, int topic, int arg)
     add_key(t, topic);
 }
 
-void make_keys(void)
+/* A topic's keys, as it is made: the words of its title, each code span
+ * in its heading, and the VDU sequence it names -- into the keys file. */
+void keys_topic(int made, const char* title, const char* heading)
 {
     static char code[REF_KEY_MAX + 1];
     static char key[REF_KEY_MAX + 1];
-    arena_mark interned_keys;
-    int t;
+    int i;
+    int got = 0;
 
-    make_settings();                    /* first: it lasts, the keys' scratch does not */
-    interned_keys = arena_here();
+    if (!norm_settings) {
+        make_settings();                /* first: it lasts to the end */
+    }
+    key_made = made;
+    each_word(title, 2, title_word, made, 0);
+    if (!heading) {
+        return;
+    }
+    for (i = 0; inline_code(heading, &i, code, (int)sizeof code);) {
+        add_key(code, made);
+        if (vdu_key(code, key)) {
+            put_key(key, (int)strlen(key));
+            got = 1;
+        }
+    }
+    if (!got && (strncmp(title, "VDU ", 4) == 0 || strncmp(title, "vdu ", 4) == 0) && vdu_key(title, key)) {
+        put_key(key, (int)strlen(key));
+    }
+}
+
+/* The keys file read back, each key to its topic as numbered now. */
+void make_keys(void)
+{
+    static uint8_t in[512];
+    unsigned have = 0;
+    unsigned at = 0;
+    arena_mark interned_keys = arena_here();
+
     new_entries();
-    for (t = 0; t < ntopics; t++) {
-        const char* h = TOPIC(t).heading;
-        int i;
-        int got = 0;
+    if (keys_rewind() == 0) {
+        for (;;) {
+            unsigned rest = have - at;
 
-        each_word(TOPIC(t).title, 2, title_word, t, 0);
-        if (!h) {
-            continue;
-        }
-        for (i = 0; inline_code(h, &i, code, (int)sizeof code);) {
-            add_key(code, t);
-            if (vdu_key(code, key)) {
-                add_entry(key, (int)strlen(key), t, 0);
-                got = 1;
+            if (rest == 0 || rest < 1u + in[at] + 2u) {
+                memmove(in, in + at, rest);
+                have = rest + keys_get(in + rest, (unsigned)sizeof in - rest);
+                at = 0;
+                rest = have;
+                if (rest == 0 || rest < 1u + in[0] + 2u) {
+                    break;
+                }
             }
-        }
-        if (!got && (strncmp(TOPIC(t).title, "VDU ", 4) == 0 || strncmp(TOPIC(t).title, "vdu ", 4) == 0)
-            && vdu_key(TOPIC(t).title, key)) {
-            add_entry(key, (int)strlen(key), t, 0);
+            {
+                unsigned len = in[at];
+                unsigned made_no = in[at + 1 + len] | (unsigned)in[at + 2 + len] << 8;
+
+                add_entry((const char*)in + at + 1, (int)len, final_of[made_no], 0);
+                at += 1 + len + 2;
+            }
         }
     }
     sort_entries();

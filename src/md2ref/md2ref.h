@@ -197,30 +197,30 @@ int inline_code(const char* s, int* at, char* out, int size);
 
 /* --- the book ---------------------------------------------------------------------- */
 
+/* A topic: only what lasts to the end is kept here, as there may be
+ * thousands. What is wanted only while its page is read -- its {#id}, its
+ * anchor -- is kept with the page (book.c); its size with those it shows,
+ * while it is held (render.c); and its keys go to the keys file as it is
+ * made, so its heading's Markdown need not be kept for them. */
 typedef struct {
     const char* title;      /* plain text */
-    const char* heading;    /* the heading's inline Markdown, or NULL for a page's top */
-    const char* id;         /* its {#id}, or NULL */
-    const char* anchor;     /* its anchor, once its page is read */
-    unsigned long total;    /* its and its descendants' markup's length */
     unsigned long text_at;  /* where its text is, in the text section */
     /* 16 bits each, as there are at most MAX_TOPICS and a topic's markup is
-     * at most 64 KB: an outline of thousands of topics fits the Agon. */
-    int16_t page;
+     * at most 64 KB. */
     int16_t made;           /* its number as made: what the words file and the
                                links to children hold, as a topic made later
                                can come before it (book_heading) */
-    int16_t level;
     int16_t parent;         /* -1 at the top */
     int16_t first_child;    /* the contents: -1 for none */
     int16_t last_child;
     int16_t next;           /* next sibling, or -1 */
     int16_t nchildren;
-    int16_t descendants;
     int16_t span;           /* how many after it are shown with it */
-    uint16_t own;           /* its markup's length, without links to its children */
     uint16_t len;           /* its markup's length, as written */
     uint16_t packed;        /* compressed */
+    uint8_t page;           /* at most MAX_PAGES */
+    uint8_t level;
+    uint8_t heading;        /* it starts at a heading: its first block's */
 } topic;
 
 /* The topics, in blocks of 256 that never move once made: a pointer to one
@@ -295,6 +295,7 @@ void words_markup(const uint8_t* m, unsigned n);
 void words_text(const char* plain, int in_title);
 void words_end(void);
 /* The keys, from every topic's heading and title. */
+void keys_topic(int made, const char* title, const char* heading);
 void make_keys(void);
 
 typedef struct {
@@ -342,6 +343,10 @@ unsigned add_patch(unsigned long at, unsigned value);
 void set_patch(unsigned k, unsigned value);
 unsigned patch_count(void);
 unsigned patch_value(unsigned k);
+/* The keys file, <out>~k: records appended; then read back from the start. */
+void keys_put(const uint8_t* p, unsigned n);
+int keys_rewind(void);
+unsigned keys_get(uint8_t* p, unsigned n);
 /* The words file: records appended; then read back from the start. */
 void words_put(const uint8_t* p, unsigned n);
 int words_rewind(void);

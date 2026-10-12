@@ -582,6 +582,8 @@ static void one_block(const page* p, const block* b)
 
 typedef struct {
     int topic;
+    unsigned long total;    /* its and its descendants' markup's length */
+    unsigned descendants;
     uint8_t* packed;
     unsigned packed_len;
     unsigned len;
@@ -592,6 +594,12 @@ typedef struct {
 
 static held hold[DEPTH];
 static int nheld;
+
+/* The page being rendered: its topics' markup's length and how many, all a
+ * top made for it later shows with it (render_top). */
+static int own_page = -1;
+static unsigned long page_own;
+static unsigned page_topics;
 
 unsigned view_size;
 unsigned max_packed;
@@ -661,7 +669,7 @@ void render_topic(int t, const block* b, int n)
     ncell_links = 0;
     block_head(B_HEAD, 1, 0, tp->level >= 1 ? (tp->level > 4 ? 4 : tp->level) : 1, 0);
     if (tp->heading) {
-        put_inline(p, b[0].no, tp->heading);
+        put_inline(p, b[0].no, b[0].text);
         b++;
         n--;
     } else {
@@ -677,18 +685,26 @@ void render_topic(int t, const block* b, int n)
     }
     too_big(t);
 
-    /* Its size counts in its own and its ancestors', which are held. */
-    tp->own = len;
-    tp->total = len;
+    /* Its size counts in its own and its ancestors', which are held, and
+     * in its page's, for a top the page may yet be given. */
+    if (tp->page != own_page) {
+        own_page = tp->page;
+        page_own = 0;
+        page_topics = 0;
+    }
+    page_own += len;
+    page_topics++;
     for (k = 0; k < nheld; k++) {
-        TOPIC(hold[k].topic).total += len;
-        TOPIC(hold[k].topic).descendants++;
+        hold[k].total += len;
+        hold[k].descendants++;
     }
     take_words(t, 0, tp->title);
 
     packed = pack(marks, nmarks);
     h = &hold[nheld < DEPTH ? nheld++ : DEPTH - 1];
     h->topic = t;
+    h->total = len;
+    h->descendants = 0;
     h->packed = md_realloc(NULL, packed + 1);
     memcpy(h->packed, packing, packed);
     h->packed_len = packed;
@@ -745,7 +761,7 @@ static void complete(held* h)
     unsigned long where;
     int k;
 
-    tp->span = tp->total <= JOIN_LIMIT ? tp->descendants : 0;
+    tp->span = h->total <= JOIN_LIMIT ? (int16_t)h->descendants : 0;
     len = h->len;
     if (tp->span == 0 && tp->nchildren) {
         room_for(len + 1);
@@ -802,14 +818,15 @@ void render_top(int t)
     /* Rendered -- its title alone -- into a place made beneath the rest,
      * none of which it counts in, as they are its descendants; all the
      * page has rendered counts in it. */
+    unsigned long own = page_own;
+    unsigned topics_so_far = page_topics;
+
     memmove(&hold[1], &hold[0], (unsigned)nheld * sizeof(held));
     nheld = 0;
     render_topic(t, NULL, 0);
     nheld = held_now + 1;
-    for (k = t + 1; k < ntopics; k++) {
-        TOPIC(t).total += TOPIC(k).own;
-        TOPIC(t).descendants++;
-    }
+    hold[0].total += own;
+    hold[0].descendants += topics_so_far;
 }
 
 void render_complete(int parent)

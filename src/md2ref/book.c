@@ -213,6 +213,28 @@ int book_starts_topic(const block* b)
 
 /* A topic, under parent, its heading kept: the page it is from will not
  * be. -1 if there are too many. */
+/* The page being read: each of its topics' {#id}, by its place in the
+ * page, wanted only for the page's anchors when it is done. */
+static const char** page_id;
+static int npage_id;
+static int max_page_id;
+
+/* Room for one more in page_id. */
+static void page_id_room(void)
+{
+    if (npage_id == max_page_id) {
+        max_page_id = max_page_id ? max_page_id * 2 : 64;
+        page_id = md_realloc(page_id, (unsigned)max_page_id * (unsigned)sizeof(char*));
+    }
+}
+
+static void page_id_add(int k, const char* id)
+{
+    (void)k;                        /* always the next: npage_id */
+    page_id_room();
+    page_id[npage_id++] = id;
+}
+
 /* A block for topic ntopics, if it is the first of one. */
 static void more_topics(void)
 {
@@ -234,10 +256,11 @@ static int new_topic(const char* title, const block* b, int page, int level, int
     t = &TOPIC(ntopics);
     memset(t, 0, sizeof *t);
     t->title = title;
-    t->heading = b ? arena_strdup(b->text) : NULL;
-    t->id = b && b->id ? arena_strdup(b->id) : NULL;
-    t->page = page;
+    t->heading = b != NULL;
+    page_id_add(ntopics - pages[page].first_topic, b && b->id ? arena_strdup(b->id) : NULL);
+    t->page = (uint8_t)page;
     t->made = made++;
+    keys_topic(t->made, title, b ? b->text : NULL);
     t->level = level;
     t->parent = parent;
     t->first_child = t->last_child = t->next = -1;
@@ -266,6 +289,7 @@ void book_page(int pi)
 {
     pages[pi].first_topic = ntopics;
     pages[pi].ntopics = 0;
+    npage_id = 0;
     pages[pi].patches_from = patch_count();
     depth = 0;
     nids = 0;
@@ -310,10 +334,15 @@ static int make_top(int pi)
             ids[k].topic++;
         }
     }
+    page_id_room();                         /* the new top is the page's first: no id */
+    memmove(page_id + 1, page_id, (unsigned)npage_id * sizeof(char*));
+    page_id[0] = NULL;
+    npage_id++;
     memset(&TOPIC(f), 0, sizeof(topic));
     TOPIC(f).title = title_from_name(pages[pi].name);
-    TOPIC(f).page = pi;
+    TOPIC(f).page = (uint8_t)pi;
     TOPIC(f).made = made++;
+    keys_topic(TOPIC(f).made, TOPIC(f).title, NULL);
     TOPIC(f).level = 0;
     TOPIC(f).parent = -1;
     TOPIC(f).first_child = TOPIC(f).last_child = f + 1;
@@ -395,9 +424,10 @@ void book_page_done(int pi)
     int k;
 
     for (t = p->first_topic; t < p->first_topic + p->ntopics; t++) {
-        if (TOPIC(t).id) {
-            TOPIC(t).anchor = TOPIC(t).id;
-            add_anchor(pi, TOPIC(t).id, t);
+        const char* id = page_id[t - p->first_topic];
+
+        if (id) {
+            add_anchor(pi, id, t);
         }
     }
     for (t = p->first_topic; t < p->first_topic + p->ntopics; t++) {
@@ -405,8 +435,8 @@ void book_page_done(int pi)
         char* a;
         int n = 1;
 
-        if (!TOPIC(t).heading || TOPIC(t).anchor) {
-            continue;
+        if (!TOPIC(t).heading || page_id[t - p->first_topic]) {
+            continue;                       /* no heading, or its {#id} is its anchor */
         }
         base = slugify(TOPIC(t).title);
         a = base;
@@ -414,7 +444,6 @@ void book_page_done(int pi)
             a = arena_alloc((unsigned)strlen(base) + 8);
             sprintf(a, "%s_%d", base, n++);
         }
-        TOPIC(t).anchor = a;
         add_anchor(pi, a, t);
     }
     for (k = 0; k < nids; k++) {

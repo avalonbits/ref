@@ -48,6 +48,7 @@ typedef struct {
 
 static file text_file;
 static file words_file;
+static file keys_file;
 static file runs_file;
 static file doc;
 
@@ -141,7 +142,8 @@ static const char* out_path;
 int scratch_open(const char* out)
 {
     out_path = out;
-    if (open_file(&text_file, out, "~t", "wb") != 0 || open_file(&words_file, out, "~w", "wb") != 0) {
+    if (open_file(&text_file, out, "~t", "wb") != 0 || open_file(&words_file, out, "~w", "wb") != 0
+        || open_file(&keys_file, out, "~k", "wb") != 0) {
         scratch_close();
 
         return -1;
@@ -154,6 +156,7 @@ void scratch_close(void)
 {
     close_file(&text_file, 0);
     close_file(&words_file, 0);
+    close_file(&keys_file, 0);
     close_file(&runs_file, 0);
 }
 
@@ -193,6 +196,21 @@ unsigned long write_text(const uint8_t* p, unsigned n)
     put(&text_file, p, n);
 
     return at;
+}
+
+void keys_put(const uint8_t* p, unsigned n)
+{
+    put(&keys_file, p, n);
+}
+
+int keys_rewind(void)
+{
+    return reread(&keys_file);
+}
+
+unsigned keys_get(uint8_t* p, unsigned n)
+{
+    return get(&keys_file, p, n);
 }
 
 void words_put(const uint8_t* p, unsigned n)
