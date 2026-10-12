@@ -40,7 +40,7 @@ EM_ON, EM_OFF, CODE_ON, CODE_OFF = 0x10, 0x11, 0x12, 0x13
 LINK, LINK_END = 0x14, 0x15
 BREAK = 0x0B
 
-TABLE_WIDTH = 78
+TABLE_WIDTH = 76         # 80 columns less the viewer's margins
 PRE_CODE, PRE_TABLE = 0, 1
 
 # Characters the builder replaces, and characters the font has above 0x7F.

@@ -26,7 +26,8 @@ const char* ui_title_at(uint32_t off);
 
 /* --- the screen -------------------------------------------------------------- */
 
-extern int scr_cols;        /* the width text is laid out to: the screen less one */
+extern int scr_cols;        /* the width text is laid out to: the screen less its margins */
+extern int scr_margin;      /* blank columns each side */
 extern int scr_rows;        /* rows for text: the screen less the status line */
 
 /* Colours by role, mapped to the mode's palette. */
@@ -44,7 +45,13 @@ void scr_colour(int role);
 void scr_add(int ch);
 void scr_adds(const char* s);
 void scr_end(void);
-int scr_x(void);             /* the column the row has reached */
+int scr_x(void);
+/* Scroll the text rows from row first down to the status line, n rows up
+ * (n > 0) or down; the rows that come into view are blank, for the caller
+ * to draw. */
+void scr_scroll(int first, int n);
+/* Rows moved further than this are redrawn rather than scrolled. */
+#define SCROLL_MAX 3             /* the column the row has reached */
 /* The cursor, shown at x, y, or hidden. */
 void scr_cursor(int x, int y, int show);
 

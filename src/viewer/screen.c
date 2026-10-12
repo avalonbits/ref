@@ -16,6 +16,8 @@
 
 int scr_cols;
 int scr_rows;
+int scr_margin;
+static int phys_cols;
 
 #define ROW_BYTES 600
 
@@ -112,7 +114,7 @@ void scr_vdp_dump(const char* why)
     for (r = 0; r <= scr_rows && r < SHADOW_ROWS; r++) {
         int n = 0;
 
-        for (x = 0; x <= scr_cols && x < SHADOW_COLS; x++) {
+        for (x = 0; x < phys_cols && x < SHADOW_COLS; x++) {
             int c = 0;
             int tries;
 
@@ -178,7 +180,11 @@ void scr_open(void)
     if (rows < 5) {
         rows = 24;
     }
-    scr_cols = cols - 1;
+    /* A margin each side: two columns at 80, one at 40. The right one takes
+     * in the last column, which must never be written anyway. */
+    phys_cols = cols;
+    scr_margin = cols >= 60 ? 2 : 1;
+    scr_cols = cols - 2 * scr_margin;
     scr_rows = rows - 1;
     cur_role = -1;
     put(23);                                /* the cursor off */
@@ -225,7 +231,7 @@ void scr_colour(int role)
 void scr_begin(int row)
 {
     put(31);
-    put(0);
+    put(scr_margin);
     put(row);
     row_x = 0;
 #ifdef REF_SCRIPT
@@ -265,6 +271,56 @@ void scr_end(void)
     flush();
 }
 
+void scr_scroll(int first, int n)
+{
+    int k;
+
+    /* The text rows from first: a viewport above the status line, scrolled a
+     * character row at a time (VDU 23,7: up when n > 0, so the text moves
+     * as the reader goes down), then the viewport reset. The rows scrolled
+     * in are left for the caller to draw. */
+    if (n == 0) {
+        return;
+    }
+    scr_colour(C_TEXT);
+    put(28);
+    put(0);
+    put(scr_rows - 1);
+    put(phys_cols - 1);
+    put(first);
+    for (k = 0; k < (n > 0 ? n : -n); k++) {
+        put(23);
+        put(7);
+        put(0);
+        put(n > 0 ? 3 : 2);
+        put(0);
+    }
+    put(26);
+    flush();
+#ifdef REF_SCRIPT
+    {
+        int h = scr_rows - first;
+        int m = n > 0 ? n : -n;
+        int r;
+
+        if (m > h) {
+            m = h;
+        }
+        if (n > 0) {
+            memmove(shadow[first], shadow[first + m], (size_t)(h - m) * SHADOW_COLS);
+            for (r = scr_rows - m; r < scr_rows; r++) {
+                memset(shadow[r], ' ', SHADOW_COLS);
+            }
+        } else {
+            memmove(shadow[first + m], shadow[first], (size_t)(h - m) * SHADOW_COLS);
+            for (r = first; r < first + m; r++) {
+                memset(shadow[r], ' ', SHADOW_COLS);
+            }
+        }
+    }
+#endif
+}
+
 int scr_x(void)
 {
     return row_x;
@@ -274,7 +330,7 @@ void scr_cursor(int x, int y, int show)
 {
     if (show) {
         put(31);
-        put(x);
+        put(x + scr_margin);
         put(y);
     }
     put(23);

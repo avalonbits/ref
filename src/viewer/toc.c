@@ -140,40 +140,81 @@ static void keep_visible(void)
     }
 }
 
+static void draw_row(int r)
+{
+    int i = top + r;
+    const node* n;
+    int d;
+
+    scr_begin(r);
+    if (i >= nrows) {
+        scr_end();
+
+        return;
+    }
+    n = &nodes[rows[i]];
+    scr_colour(C_TEXT);
+    for (d = 0; d < n->depth; d++) {
+        scr_adds("  ");
+    }
+    scr_colour(C_DIM);
+    scr_add(n->child == REF_NONE ? ' ' : n->open ? '-' : '+');
+    scr_add(' ');
+    scr_colour(i == cursor ? C_SEL : n->topic == REF_NONE ? C_HEAD : C_TEXT);
+    scr_adds(ui_title_at(n->title));
+    scr_colour(C_TEXT);
+    scr_end();
+}
+
+static void log_state(void)
+{
+#ifdef REF_SCRIPT
+    script_log("toc row %d node %d top %d rows %d", cursor, nrows ? rows[cursor] : -1, top, nrows);
+#endif
+}
+
 static void draw(void)
 {
     int r;
 
     for (r = 0; r < scr_rows; r++) {
-        int i = top + r;
-        const node* n;
-        int d;
-
-        scr_begin(r);
-        if (i >= nrows) {
-            scr_end();
-            continue;
-        }
-        n = &nodes[rows[i]];
-        scr_colour(C_TEXT);
-        for (d = 0; d < n->depth; d++) {
-            scr_adds("  ");
-        }
-        scr_colour(C_DIM);
-        scr_add(n->child == REF_NONE ? ' ' : n->open ? '-' : '+');
-        scr_add(' ');
-        scr_colour(i == cursor ? C_SEL : n->topic == REF_NONE ? C_HEAD : C_TEXT);
-        scr_adds(ui_title_at(n->title));
-        scr_colour(C_TEXT);
-        scr_end();
+        draw_row(r);
     }
     scr_begin(scr_rows);
     scr_colour(C_STATUS);
     scr_adds(" Contents   Enter: open   Right/Left: show/hide   Esc: back");
     scr_end();
-#ifdef REF_SCRIPT
-    script_log("toc row %d node %d top %d rows %d", cursor, nrows ? rows[cursor] : -1, top, nrows);
-#endif
+    log_state();
+}
+
+/* The cursor moved from row was_cursor with the list's top at was_top, and
+ * nothing else changed: scroll if the top moved a little, and draw only the
+ * rows that changed. */
+static void moved(int was_top, int was_cursor)
+{
+    int d = top - was_top;
+    int r;
+
+    if (d > SCROLL_MAX || d < -SCROLL_MAX) {
+        draw();
+
+        return;
+    }
+    scr_scroll(0, d);
+    if (d > 0) {
+        for (r = scr_rows - d; r < scr_rows; r++) {
+            draw_row(r);
+        }
+    } else {
+        for (r = 0; r < -d; r++) {
+            draw_row(r);
+        }
+    }
+    if (was_cursor - top >= 0 && was_cursor - top < scr_rows) {
+        draw_row(was_cursor - top);
+    }
+    draw_row(cursor - top);
+    log_state();
 }
 
 int toc_loop(int topic)
@@ -197,6 +238,9 @@ int toc_loop(int topic)
         key k = in_wait();
         int m = in_meaning(k);
         node* n = &nodes[rows[cursor]];
+        int was_top = top;
+        int was_cursor = cursor;
+        int shape = 0;              /* the tree opened or closed: redraw it all */
 
         switch (m) {
         case K_UP:
@@ -221,6 +265,7 @@ int toc_loop(int topic)
             if (n->child != REF_NONE && !n->open) {
                 n->open = 1;
                 rebuild();
+                shape = 1;
             } else if (n->child != REF_NONE) {
                 cursor++;                   /* into it */
             }
@@ -229,6 +274,7 @@ int toc_loop(int topic)
             if (n->open) {
                 n->open = 0;
                 rebuild();
+                shape = 1;
             } else if (n->parent != REF_NONE) {
                 cursor = row_of(n->parent);
             }
@@ -239,6 +285,7 @@ int toc_loop(int topic)
             }
             n->open = !n->open;
             rebuild();
+            shape = 1;
             break;
         case K_FIND:
             return -2;
@@ -257,6 +304,10 @@ int toc_loop(int topic)
             break;
         }
         keep_visible();
-        draw();
+        if (shape) {
+            draw();
+        } else if (top != was_top || cursor != was_cursor) {
+            moved(was_top, was_cursor);
+        }
     }
 }

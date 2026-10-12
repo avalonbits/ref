@@ -107,7 +107,7 @@ dump:forward")
 check "ref -k vdu 23 27 3 opens Draw current bitmap" \
       "$(dump "$t" open | head -1)" \
       "VDU 23, 27, 3, x; y;: Draw current bitmap on screen at pixel position x, y"
-check "  Tab selects its first link" "$(grep -c '^view topic 502 top 0 lines 22 sel 4:16$' <<< "$t")" 1
+check "  Tab selects its first link" "$(grep -c '^view topic 502 top 0 lines 22 sel 4:20$' <<< "$t")" 1
 check "  Enter follows it" "$(dump "$t" link | head -1)" "Bitmap plots (PLOT codes &E8-&EF)"
 check "  the status line says where it is" \
       "$(dump "$t" link | tail -1 | sed 's/  *[0-9]*%$//')" \
@@ -220,25 +220,63 @@ else
 fi
 
 # --- on the real VDP: what ref drew, read back ---
+# vdp_screen <transcript> <name>: what the VDP showed at vdp:<name>.
+vdp_screen() {
+    awk -v want="== vdp $2" '$0 == want { p = 1; next } /^== |^key |^exit / { p = 0 } p' <<< "$1"
+}
+# same <transcript> <name> <margin> <width>: does the VDP show, inside the
+# margins, what ref meant to draw? The status line, the last row, is left
+# out: the VDP cannot read back its last row (nor its last column).
+same() {
+    local drawn read
+    drawn=$(dump "$1" "$2" | sed '$d' | sed 's/ *$//')
+    read=$(vdp_screen "$1" "$2" | sed '$d' | cut -c$(($3 + 1))-$(($3 + $4)) | sed 's/ *$//')
+    [ "$(md5sum <<< "$drawn")" = "$(md5sum <<< "$read")" ] && echo yes || echo no
+}
+# margins_blank <transcript> <name> <margin> <width>: nothing in the margins.
+margins_blank() {
+    vdp_screen "$1" "$2" | sed '$d' | awk -v m="$3" -v w="$4" '
+        { left = substr($0, 1, m); right = substr($0, m + w + 1)
+          sub(/\.$/, "", right)            # the last column: unreadable
+          if (left ~ /[^ ]/ || right ~ /[^ ]/) bad = 1 }
+        END { print bad ? "no" : "yes" }'
+}
 if [ -x "$EMU/fab-agon-emulator" ]; then
     for mode in 3 8 0; do
+        if [ "$mode" = 8 ]; then margin=1; width=38; else margin=2; width=76; fi
         sd=$(emu_card "$SCRIPTED")
         printf 'VDU 22 %s\r\nref -k vdu 23 27 3\r\n' "$mode" > "$sd/autoexec.txt"
         printf 'tab\ndump:screen\nvdp:screen\nesc\n' > "$sd/ref.keys"
         emu_run "$sd" 300 full > /dev/null
         t=$(tr -d '\r' < "$sd/ref.out" 2>/dev/null)
         rm -rf "$sd"
-        drawn=$(dump "$t" screen | sed '$d')
-        width=$(dump "$t" screen | awk '{ if (length > w) w = length } END { print w }')
-        # The VDP cannot read back its last column or row: compare the rest.
-        read=$(awk -v want="== vdp screen" '$0 == want { p = 1; next } /^== |^key |^exit / { p = 0 } p' <<< "$t" \
-               | sed '$d' | cut -c1-$((width)) | sed 's/ *$//')
         check "mode $mode: the VDP shows what ref drew, nothing wrapped or scrolled" \
-              "$(sed 's/ *$//' <<< "$drawn" | md5sum)" "$(md5sum <<< "$read")"
-        check "  and the topic is there" "$(has "$read" 'Draw current')" yes
-        check "  laid out to the screen's width, less its last column" "$width" \
-              "$([ "$mode" = 8 ] && echo 39 || echo 79)"
+              "$(same "$t" screen "$margin" "$width")" yes
+        check "  and the topic is there" "$(has "$(vdp_screen "$t" screen)" 'Draw current')" yes
+        check "  laid out to the screen's width less a margin each side" \
+              "$(dump "$t" screen | awk '{ if (length > w) w = length } END { print w }')" "$width"
+        check "  the margins are blank" "$(margins_blank "$t" screen "$margin" "$width")" yes
     done
+
+    # Scrolling a line or two moves the rows on the VDP rather than redrawing
+    # them: the screen must still be what ref meant, in a topic, the
+    # contents and a list.
+    sd=$(emu_card "$SCRIPTED")
+    printf 'VDU 22 3\r\nref -k VDU 23,0,&A0,1;6\r\n' > "$sd/autoexec.txt"
+    printf '%s\n' down down down dump:down vdp:down up dump:up vdp:up \
+        c:t pgdn down down dump:toc vdp:toc esc \
+        c:/ text:mos dump:find down vdp:find0 dump:find0 \
+        pgdn down down dump:list vdp:list esc esc > "$sd/ref.keys"
+    emu_run "$sd" 300 full > /dev/null
+    t=$(tr -d '\r' < "$sd/ref.out" 2>/dev/null)
+    rm -rf "$sd"
+    check "Down scrolls the rows rather than redrawing them" \
+          "$(grep -c 'scrolled 1$' <<< "$t")" 3
+    check "  and the VDP shows the topic three lines on" "$(same "$t" down 2 76)" yes
+    check "  and back up one" "$(same "$t" up 2 76)" yes
+    check "the contents, moved past the page's end, as drawn" "$(same "$t" toc 2 76)" yes
+    check "find's list, its cursor moved, as drawn" "$(same "$t" find0 2 76)" yes
+    check "  and scrolled past its end, as drawn" "$(same "$t" list 2 76)" yes
 else
     echo "SKIP  real VDP: no full emulator"
 fi

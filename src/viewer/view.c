@@ -299,6 +299,40 @@ static void draw(void)
 #endif
 }
 
+#define SCROLLED 2
+
+/* After the text moved from line was to top: a short move scrolls the rows
+ * on screen and draws only those that came into view; a long one redraws. */
+static void moved(int was)
+{
+    int d = top - was;
+    int r;
+
+    if (d == 0) {
+        return;
+    }
+    if (d > SCROLL_MAX || d < -SCROLL_MAX) {
+        draw();
+
+        return;
+    }
+    scr_scroll(0, d);
+    if (d > 0) {
+        for (r = scr_rows - d; r < scr_rows; r++) {
+            draw_line(r, top + r);
+        }
+    } else {
+        for (r = 0; r < -d; r++) {
+            draw_line(r, top + r);
+        }
+    }
+    draw_status();
+#ifdef REF_SCRIPT
+    script_log("view topic %d top %d lines %d sel %d:%d scrolled %d", cur, top, nlines, sel,
+               sel_col, d);
+#endif
+}
+
 /* --- links -------------------------------------------------------------------- */
 
 /* The links that start on a line (not those carried onto it): each one's
@@ -427,25 +461,32 @@ int view_loop(void)
         key k = in_wait();
         int m = in_meaning(k);
         int redraw = 1;
+        int was = top;              /* for the scroll keys: where they started */
 
         switch (m) {
         case K_UP:
             scroll_to(top - 1);
+            redraw = SCROLLED;
             break;
         case K_DOWN:
             scroll_to(top + 1);
+            redraw = SCROLLED;
             break;
         case K_PGUP:
             scroll_to(top - (scr_rows - 1));
+            redraw = SCROLLED;
             break;
         case K_PGDN:
             scroll_to(top + (scr_rows - 1));
+            redraw = SCROLLED;
             break;
         case K_HOME:
             scroll_to(0);
+            redraw = SCROLLED;
             break;
         case K_END:
             scroll_to(nlines);
+            redraw = SCROLLED;
             break;
         case K_LEFT:
             hscroll = hscroll > HSTEP ? hscroll - HSTEP : 0;
@@ -522,9 +563,11 @@ int view_loop(void)
             }
             case ' ':
                 scroll_to(top + (scr_rows - 1));
+                redraw = SCROLLED;
                 break;
             case 'b':
                 scroll_to(top - (scr_rows - 1));
+                redraw = SCROLLED;
                 break;
             default:
                 redraw = 0;
@@ -533,7 +576,9 @@ int view_loop(void)
         default:
             redraw = 0;
         }
-        if (redraw) {
+        if (redraw == SCROLLED) {
+            moved(was);
+        } else if (redraw) {
             draw();
         }
     }

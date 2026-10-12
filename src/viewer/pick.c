@@ -41,6 +41,50 @@ static unsigned page_of(unsigned t)
     }
 }
 
+static void draw_row(int first, int r, int input)
+{
+    int i = top + r;
+    const row* w;
+    unsigned page;
+
+    scr_begin(first + r);
+    if (i >= nrows) {
+        if (i == 0 && input && query[0]) {
+            scr_colour(C_DIM);
+            scr_adds("  nothing found");
+        }
+        scr_end();
+
+        return;
+    }
+    w = &rows[i];
+    scr_colour(i == cursor ? C_SEL : C_TEXT);
+    scr_add(' ');
+    if (w->label) {
+        scr_colour(i == cursor ? C_SEL : C_CODE);
+        scr_adds(w->label);
+        scr_colour(i == cursor ? C_SEL : C_DIM);
+        scr_adds("  ");
+    }
+    scr_colour(i == cursor ? C_SEL : C_TEXT);
+    scr_adds(ui_title(w->topic));
+    page = page_of(w->topic);
+    if (page != w->topic) {
+        scr_colour(C_DIM);
+        scr_adds("  - ");
+        scr_adds(ui_title(page));
+    }
+    scr_colour(C_TEXT);
+    scr_end();
+}
+
+static void log_state(void)
+{
+#ifdef REF_SCRIPT
+    script_log("pick row %d of %d top %d query '%s'", cursor, nrows, top, query);
+#endif
+}
+
 static void draw(const char* heading, int first, int input)
 {
     int r;
@@ -55,38 +99,7 @@ static void draw(const char* heading, int first, int input)
         scr_end();
     }
     for (r = 0; r < shown; r++) {
-        int i = top + r;
-        const row* w;
-        unsigned page;
-
-        scr_begin(first + r);
-        if (i >= nrows) {
-            if (i == 0 && input && query[0]) {
-                scr_colour(C_DIM);
-                scr_adds("  nothing found");
-            }
-            scr_end();
-            continue;
-        }
-        w = &rows[i];
-        scr_colour(i == cursor ? C_SEL : C_TEXT);
-        scr_add(' ');
-        if (w->label) {
-            scr_colour(i == cursor ? C_SEL : C_CODE);
-            scr_adds(w->label);
-            scr_colour(i == cursor ? C_SEL : C_DIM);
-            scr_adds("  ");
-        }
-        scr_colour(i == cursor ? C_SEL : C_TEXT);
-        scr_adds(ui_title(w->topic));
-        page = page_of(w->topic);
-        if (page != w->topic) {
-            scr_colour(C_DIM);
-            scr_adds("  - ");
-            scr_adds(ui_title(page));
-        }
-        scr_colour(C_TEXT);
-        scr_end();
+        draw_row(first, r, input);
     }
     scr_begin(scr_rows);
     scr_colour(C_STATUS);
@@ -99,9 +112,40 @@ static void draw(const char* heading, int first, int input)
     if (input) {
         scr_cursor(6 + (int)strlen(query), 0, 1);
     }
-#ifdef REF_SCRIPT
-    script_log("pick row %d of %d top %d query '%s'", cursor, nrows, top, query);
-#endif
+    log_state();
+}
+
+/* The cursor moved, nothing else: scroll the list if its top moved a
+ * little, and draw only the rows that changed. */
+static void moved(const char* heading, int first, int input, int was_top, int was_cursor)
+{
+    int shown = scr_rows - first;
+    int d = top - was_top;
+    int r;
+
+    if (d > SCROLL_MAX || d < -SCROLL_MAX) {
+        draw(heading, first, input);
+
+        return;
+    }
+    scr_scroll(first, d);
+    if (d > 0) {
+        for (r = shown - d; r < shown; r++) {
+            draw_row(first, r, input);
+        }
+    } else {
+        for (r = 0; r < -d; r++) {
+            draw_row(first, r, input);
+        }
+    }
+    if (was_cursor - top >= 0 && was_cursor - top < shown) {
+        draw_row(first, was_cursor - top, input);
+    }
+    draw_row(first, cursor - top, input);
+    if (input) {
+        scr_cursor(6 + (int)strlen(query), 0, 1);
+    }
+    log_state();
 }
 
 static void keep_visible(int shown)
@@ -159,9 +203,11 @@ static int choose(const char* heading)
     for (;;) {
         key k = in_wait();
         int m = in_meaning(k);
+        int was_top = top;
+        int was_cursor = cursor;
 
         if (move(m, scr_rows)) {
-            draw(heading, 0, 0);
+            moved(heading, 0, 0, was_top, was_cursor);
             continue;
         }
         if (m == K_ENTER && nrows > 0) {
@@ -258,10 +304,12 @@ int pick_find(const char* text)
         key k = in_wait();
         int m = in_meaning(k);
         int changed = 0;
+        int was_top = top;
+        int was_cursor = cursor;
 
         len = (int)strlen(query);
         if (move(m, scr_rows - 1)) {
-            draw(HEADING, 1, 1);
+            moved(HEADING, 1, 1, was_top, was_cursor);
             continue;
         }
         if (m == K_ENTER) {

@@ -163,7 +163,7 @@ because the screen width depends on the mode and font:
 `build/refbuild/layout.py` the layout, which the C reproduces line for line.
 Blocks are `kind|flags indent hang content END`; runs of spaces are one space
 (the wiki puts two after a full stop); tables are ruled columns laid out to
-78 columns, cells wrapped within them, links inside cells kept. A topic
+76 columns (80 less the viewer's margins), cells wrapped within them, links inside cells kept. A topic
 shown without its descendants -- because together they pass 16 KB --
 ends with "In this section:" and a link to each child. Each line the core
 lays out records the style and link open where it starts, so the viewer can
@@ -310,8 +310,14 @@ core at least).
 *As built (step 4)* -- `src/viewer`, on the core:
 
 - **The screen**: the mode and font in use, whatever they are; text is laid
-  out to the width less one column, and nothing is ever written in the last
-  column, so the VDP never wraps or scrolls under ref. The last row is a
+  out inside a margin of two columns each side (one in a 40-column mode),
+  so nothing is ever written in the last column and the VDP never wraps or
+  scrolls under ref. Tables are laid out to 76 columns to fit. Moving a
+  line or three scrolls the text rows on the VDP -- a text viewport above
+  the status line, `VDU 23,7,0,dir,0`, then `VDU 26` -- and draws only the
+  rows that came into view; longer jumps redraw, as a run of scrolls costs
+  more than one repaint. The contents and lists likewise redraw only the
+  two rows a cursor move changes. The last row is a
   status line: the topic's place in the tree, and how far down. Each row is
   drawn whole and sent in one RST 18h call. Colours by role (text, emphasis,
   code, link, the selected link, headings, notes, status) mapped for 16, 4
@@ -423,7 +429,8 @@ builds the two zips locally (`ref-<version>.zip` for the card,
   control); on the full emulator, in modes 3, 8 and 0, the screen read back
   from the VDP itself (`VDU 23,0,&83`, retried in each role's colours, since
   the VDP matches in the current text colour) against what ref meant to
-  draw; the heap's peak; and the timings, paced.
+  draw, the margins blank, and the same after region scrolling in a topic,
+  the contents and a list; the heap's peak; and the timings, paced.
 - `test/core.sh` -- the core on the Agon: `test/host/reftool.c`, built by
   agondev and by acc, runs every mode in the emulator with its inputs and
   outputs as files on the card, and must answer byte for byte as the PC
