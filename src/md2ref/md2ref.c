@@ -1,11 +1,15 @@
 /*
  * md2ref: Markdown pages compiled into a ref document. See md2ref.h.
  *
- *   md2ref -o <file.dat> [-t <title>] [-w] <dir> | <page.md>...
+ *   md2ref [-t <title>] [-w] <name> [<dir> | <page.md>...]
+ *   md2ref [-t <title>] [-w] -o <file.dat> <dir> | <page.md>...
  *
- *   -o   the document to write: /config/ref/docs/<name>.dat to install it
- *   -t   its title (else the first page's first heading)
- *   -w   a link that leads nowhere is a warning, not an error
+ *   <name>  the document: ref-doc/<name>.dat, where a program keeps its
+ *           own, ref-doc made if it is not there; the pages, if none are
+ *           given, are the current directory's
+ *   -o      the document to write instead, anywhere
+ *   -t      its title (else the first page's first heading)
+ *   -w      a link that leads nowhere is a warning, not an error
  *
  * Errors are reported as file:line: error: ..., and md2ref then writes
  * nothing and returns 100 -- as acc and zap do with -e, so an editor can
@@ -271,16 +275,38 @@ static int render(void)
     return md_errors ? -1 : 0;
 }
 
+#define DOC_DIR "ref-doc"
+
 static int usage(void)
 {
-    printf("usage: md2ref -o <file.dat> [-t <title>] [-w] <dir> | <page.md>...\n");
+    printf("usage: md2ref [-t <title>] [-w] <name> [<dir> | <page.md>...]\n"
+           "       md2ref [-t <title>] [-w] -o <file.dat> <dir> | <page.md>...\n"
+           "  <name> writes " DOC_DIR "/<name>.dat, from the current directory's pages\n"
+           "  if none are given\n");
 
     return FAILED;
+}
+
+/* A document's name, as ref takes it: one to eight lower-case letters and
+ * digits. */
+static int valid_name(const char* s)
+{
+    int n = 0;
+
+    for (; *s; s++, n++) {
+        if (!((*s >= 'a' && *s <= 'z') || (*s >= '0' && *s <= '9'))) {
+            return 0;
+        }
+    }
+
+    return n >= 1 && n <= 8;
 }
 
 int main(int argc, char** argv)
 {
     static char* inputs[64];
+    static char here[] = ".";
+    static char named[sizeof DOC_DIR + 16];
     const char* out = NULL;
     const char* title = NULL;
     int ninputs = 0;
@@ -300,7 +326,26 @@ int main(int argc, char** argv)
             inputs[ninputs++] = argv[i];
         }
     }
-    if (!out || ninputs == 0) {
+    if (!out) {
+        /* md2ref <name> [pages]: the first is the name. */
+        if (ninputs == 0) {
+            return usage();
+        }
+        if (!valid_name(inputs[0])) {
+            printf("md2ref: error: '%.40s' is not a document's name: one to eight lower-case\n"
+                   "letters and digits (or give -o <file.dat>)\n", inputs[0]);
+
+            return FAILED;
+        }
+        sprintf(named, "%s/%s.dat", DOC_DIR, inputs[0]);
+        out = named;
+        ninputs--;
+        memmove(inputs, inputs + 1, (size_t)ninputs * sizeof inputs[0]);
+        if (ninputs == 0) {
+            inputs[ninputs++] = here;
+        }
+        make_dir(DOC_DIR);
+    } else if (ninputs == 0) {
         return usage();
     }
 

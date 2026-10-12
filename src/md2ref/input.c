@@ -12,6 +12,7 @@
 #include <agon/mos.h>
 #else
 #include <dirent.h>
+#include <sys/stat.h>
 #endif
 
 #include "md2ref.h"
@@ -202,6 +203,15 @@ static int list_dir(const char* dir)
     return 0;
 }
 #endif
+
+void make_dir(const char* path)
+{
+#ifdef AGONDEV
+    ffs_mkdir(path);
+#else
+    mkdir(path, 0777);
+#endif
+}
 
 static const char* base_name(const char* path)
 {

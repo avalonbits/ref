@@ -1,7 +1,8 @@
 /*
  * md2ref: Markdown pages compiled into a ref document (docs/FORMAT.md).
  *
- *   md2ref -o <file.dat> [-t <title>] [-w] <dir> | <page.md>...
+ *   md2ref [-t <title>] [-w] <name> [<dir> | <page.md>...]
+ *   md2ref [-t <title>] [-w] -o <file.dat> <dir> | <page.md>...
  *
  * Portable C, like the reader core: it builds for the PC, and for the Agon
  * with agondev, so a program's documentation can be compiled where it is
@@ -93,6 +94,9 @@ extern int npages;
 /* The pages to compile: the files given, or a directory's .md files in
  * name order (index.md or README.md first). 0, or -1. */
 int read_pages(int nargs, char** args);
+/* A directory made, if it is not there already: any failure shows when a
+ * file in it cannot be written. */
+void make_dir(const char* path);
 /* Page i read and parsed into the source's arena: its lines and blocks,
  * until the arena is dropped. 0, or -1. */
 int load_page(int i);

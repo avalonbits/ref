@@ -99,20 +99,22 @@ ref uses the screen mode and font already in use; under hub, the prompt's.
 
 md2ref compiles Markdown pages into a document, on the Agon or on a PC:
 
-    md2ref -o <name>.dat [-t <title>] [-w] <dir>
-    md2ref -o <name>.dat [-t <title>] [-w] <page.md>...
+    md2ref <name> [<dir> | <page.md>...]
+    md2ref -o <file.dat> <dir> | <page.md>...
 
-`-o` is the document to write, and the rest is the Markdown to read: a
-directory, whose `.md` files are read with `index.md` or `README.md` first
-and the rest by name, or pages in the order given. `-t` sets the title
-(else the first page's first heading); `-w` makes a link that leads
-nowhere a warning instead of an error.
+`md2ref myprog` writes `ref-doc/myprog.dat`, making `ref-doc` if it is not
+there, from the `.md` files in the current directory. Name a directory or
+pages after it to read those instead: a directory's `.md` files are read
+with `index.md` or `README.md` first and the rest by name, pages in the
+order given. The name is the one ref will know it by: one to eight
+lower-case letters and digits. `-o` writes the document anywhere else,
+such as `/config/ref/docs/myprog.dat` to install it for everyone.
 
-    md2ref -o /config/ref/docs/myprog.dat docs      install it for everyone
-    md2ref -o ref-doc/myprog.dat docs               keep it with the program
+`-t` sets the title (else the first page's first heading), and `-w` makes
+a link that leads nowhere a warning instead of an error.
 
 ade compiles a program's Markdown, wherever it is, into the program's
-`ref-doc/` directory; `ref myprog`, run in `ref-doc/`, reads it.
+`ref-doc/`; `ref myprog`, run in `ref-doc/`, reads it.
 
 - **Topics** are the headings, nested by level. A page that opens with its
   only `#` heading is that topic; otherwise the page is a topic titled

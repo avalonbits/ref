@@ -7,6 +7,7 @@ reader core, as ref on the Agon reads them.
 
 import glob
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -116,8 +117,35 @@ class Md2ref(unittest.TestCase):
         self.assertEqual(p.returncode, FAILED)
         self.assertEqual(p.stdout, 'bad/fence.md:3: error: code block never closed\n')
 
+    def test_name_writes_ref_doc_from_the_current_directory(self):
+        with tempfile.TemporaryDirectory() as d:
+            shutil.copytree(DOC, os.path.join(d, 'proj'))
+            proj = os.path.join(d, 'proj')
+            p = subprocess.run([MD2REF, 'myprog'], capture_output=True, text=True, cwd=proj)
+            self.assertEqual(p.returncode, 0, p.stdout)
+            self.assertEqual(p.stdout,
+                             'md2ref: ref-doc/myprog.dat: 2 pages, 6 topics, 14 keys, 43 words\n')
+            with open(os.path.join(proj, 'ref-doc', 'myprog.dat'), 'rb') as f:
+                self.assertEqual(f.read(), compile_doc('doc'))
+
+    def test_name_with_pages(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = subprocess.run([MD2REF, '-t', 'Other', 'myprog', DOC], capture_output=True,
+                               text=True, cwd=d)
+            self.assertEqual(p.returncode, 0, p.stdout)
+            with open(os.path.join(d, 'ref-doc', 'myprog.dat'), 'rb') as f:
+                self.assertEqual(f.read(), compile_doc('-t', 'Other', 'doc'))
+
+    def test_a_name_ref_cannot_open_is_refused(self):
+        for name in ('MyProg', 'toolongname', 'docs/x', 'x.md'):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as d:
+                p = subprocess.run([MD2REF, name], capture_output=True, text=True, cwd=d)
+                self.assertEqual(p.returncode, FAILED)
+                self.assertIn("is not a document's name", p.stdout)
+                self.assertFalse(os.path.exists(os.path.join(d, 'ref-doc')))
+
     def test_usage(self):
-        for args in ((), ('doc',), ('-o', 'x.dat'), ('-q', '-o', 'x.dat', 'doc')):
+        for args in ((), ('-o', 'x.dat'), ('-q', '-o', 'x.dat', 'doc')):
             with self.subTest(args=args):
                 p = md2ref(*args)
                 self.assertEqual(p.returncode, FAILED)
