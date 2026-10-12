@@ -466,6 +466,17 @@ void number_topics(void)
 
 int book_done(const char* title)
 {
+    /* Every page read: no link is resolved after, and its anchors' tables
+     * give their room to what comes next. */
+    free(anchor_slot);
+    free(anchors);
+    anchor_slot = NULL;
+    anchors = NULL;
+    anchor_slots = 0;
+    nanchors = max_anchors = 0;
+    free(page_id);
+    page_id = NULL;
+    npage_id = max_page_id = 0;
     book_title = title ? agon_string(title) : ntopics ? TOPIC(0).title : "";
 
     return ntopics ? 0 : -1;

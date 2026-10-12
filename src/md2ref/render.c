@@ -635,10 +635,10 @@ static unsigned pack(const mark* m, int n)
 static void take_words(int t, unsigned start, const char* title)
 {
     words_begin(t);
-    words_markup(buf + start, len - start);
     if (title) {
-        words_text(title, 1);
+        words_text(title, 1);           /* first: a word's posting says it is in the title */
     }
+    words_markup(buf + start, len - start);
     words_end();
 }
 

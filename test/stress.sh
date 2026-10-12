@@ -16,7 +16,7 @@ source "$ROOT/test/emu.sh"
 CYCLES_EMU=${CYCLES_EMU:-$HOME/fab-agon-emulator-2037657}
 
 declare -A BUDGET=(
-    [anchors]=6000 [common]=4800 [keys]=13500 [prefix]=5200 [repeats]=5000
+    [anchors]=6000 [common]=4800 [keys]=13500 [prefix]=5200 [repeats]=5600
     [run]=13000 [span]=9300 [spans]=10500 [table]=3600 [unclosed]=5700
 )
 

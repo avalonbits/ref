@@ -559,12 +559,21 @@ void make_keys(void)
 
 /* --- words ----------------------------------------------------------------------- */
 
-/* Nothing of the words is kept in memory but the topic's being read: each
- * topic's words, once each, go to the words file as records -- a length,
- * the word, and the topic's number as made, its top bit set if the word is
- * in the title. At the end the file is sorted on the card, in runs that
- * fit RUN bytes, merged a small window per run. However many different
- * words a document has, the memory is the same. */
+/* The words go to the words file as they are found, in one of two kinds
+ * of record. Most words are in the dictionary, each different word once,
+ * numbered as found: each topic's use of one is a posting, a 0 then its
+ * number and the topic's (as made, its top bit set if the word is in the
+ * title) -- five bytes, the word itself not repeated, and nothing to sort,
+ * as a topic is found once a word's last topic is not it. At the end the
+ * dictionary is sorted, and the postings gathered a range of its words at
+ * a time.
+ *
+ * The dictionary has at most DICT_BYTES. The words found once it is full
+ * -- fewer, and rarer, as the common ones come early -- go as the word:
+ * its length, it, and the topic's number, each once a topic; and these
+ * are sorted on the card, in runs that fit RUN bytes, merged a small
+ * window per run, and woven in with the dictionary's as they are written.
+ * However many different words a document has, the memory is bounded. */
 
 #define RUN      16384      /* records sorted in memory at once: their offsets are 16 bits */
 #define RUN_WIN  512        /* a run's window, merging */
@@ -584,24 +593,57 @@ static unsigned word_topic;
 
 #define FIRST_SLOTS 64
 
+/* The dictionary. */
+#define DICT_BYTES  (48 * 1024)     /* its entries, letters and table, at most */
+#define DICT_BLOCK  256
+#define DICT_MAX    8192            /* words: numbers fit 13 bits, and a table of 16 */
+#define DICT_TEXT   1024            /* a chunk of its letters */
+#define POSTING     0               /* a record that is a posting */
+
+typedef struct {
+    uint8_t* s;             /* its letters */
+    uint16_t last;          /* the last topic, as made, + 1, while reading; then its rank */
+    uint16_t count;         /* its postings */
+    uint16_t id;            /* its number */
+    uint8_t len;
+    uint8_t stop;           /* a stop word: in the dictionary only to be found as one */
+} dword;
+
+static dword* dict_block[DICT_MAX / DICT_BLOCK];
+static unsigned ndict;
+static unsigned dict_bytes;
+static int dict_full;
+static dword** dslot;               /* the words, by hash: probed by pointer, which is
+                                     * no multiply or shift on the eZ80 */
+static unsigned ndslots;
+static uint8_t* dtext;              /* the chunk being filled, and what is left of it */
+static unsigned dtext_left;
+static uint8_t** dtext_chunks;      /* every chunk, to free */
+static unsigned ndtext_chunks;
+static unsigned dtext_chunks_cap;
+
+#define DW(k) (dict_block[(unsigned)(k) >> 8][(uint8_t)(k)])
+
 /* Pearson's hash of the bytes of a word that tell words apart most -- its
  * length, its first two letters, its middle one and its last -- each two
  * 8-bit lookups, not the whole word through md_hash: a word that shares
  * them all with another is told apart by the comparison after. */
-static unsigned word_hash(const uint8_t* w, unsigned len)
+static unsigned word_hash(const uint8_t* w, uint8_t len)
 {
     const uint8_t* t = md_pearson;
-    uint8_t a = t[(uint8_t)len];
+    const uint8_t* mid = w + (len >> 1);
+    const uint8_t* last = w + len - 1;
+    uint8_t a = t[len];                 /* bytes throughout: an int's and is a call */
     uint8_t b = t[(uint8_t)(len + 1)];
 
     a = t[a ^ w[0]];
     b = t[b ^ w[0]];
     a = t[a ^ w[1]];
     b = t[b ^ w[1]];
-    a = t[a ^ w[len >> 1]];
-    b = t[b ^ w[len >> 1]];
-    a = t[a ^ w[len - 1]];
-    b = t[b ^ w[len - 1]];
+    a = t[a ^ *mid];
+    b = t[b ^ *mid];
+    a = t[a ^ *last];
+    b = t[b ^ *last];
 
     return (unsigned)b << 8 | a;
 }
@@ -627,8 +669,10 @@ static void more_slots(void)
         slot = md_realloc(slot, slot_cap * (unsigned)sizeof(uint16_t));
     }
     memset(slot, 0, nslots * sizeof(uint16_t));
-    for (at = 0; at < wlen; at += 1u + wbuf[at] + 2u) {
-        place(at);
+    for (at = 0; at < wlen; at += wbuf[at] ? 1u + wbuf[at] + 2u : 5u) {
+        if (wbuf[at] != POSTING) {
+            place(at);
+        }
     }
 }
 
@@ -636,7 +680,7 @@ static void text_word(const char* word, int len, int topic, int in_title)
 {
     const uint8_t* key = (const uint8_t*)word;
     unsigned mask = nslots - 1;
-    unsigned h = word_hash(key, (unsigned)len) & mask;
+    unsigned h = word_hash(key, (uint8_t)len) & mask;
     unsigned at;
 
     (void)topic;
@@ -666,6 +710,188 @@ static void text_word(const char* word, int len, int topic, int in_title)
     }
 }
 
+/* The dictionary's hash of a word: Pearson's, two lanes, of every letter
+ * -- as words_markup makes it while it reads the word. */
+static unsigned dict_hash(const uint8_t* w, unsigned len)
+{
+    const uint8_t* t = md_pearson;
+    const uint8_t* e = w + len;
+    uint8_t a = 0;
+    uint8_t b = 1;
+
+    while (w < e) {
+        a = t[a ^ *w];
+        b = t[b ^ *w++];
+    }
+
+    return (unsigned)b << 8 | a;
+}
+
+/* The slot for w, of hash h: the one it is in, or the empty one it would
+ * go in. */
+static dword** dict_find_h(const uint8_t* w, uint8_t len, unsigned h)
+{
+    dword** sp = dslot + (h & (ndslots - 1));
+    dword** end = dslot + ndslots;
+    dword* d;
+
+    while ((d = *sp) != NULL && (d->len != len || memcmp(d->s, w, len) != 0)) {
+        if (++sp == end) {
+            sp = dslot;
+        }
+    }
+
+    return sp;
+}
+
+static dword** dict_find(const uint8_t* w, uint8_t len)
+{
+    return dict_find_h(w, len, dict_hash(w, len));
+}
+
+/* The table twice as big, made again from the words: the old freed first,
+ * so it never holds both. 0, or -1 if there is not the room for it. */
+static int dict_slots(void)
+{
+    unsigned want = ndslots ? ndslots * 2 : 512;
+    unsigned k;
+
+    if (dict_bytes + (want - ndslots) * (unsigned)sizeof(dword*) > DICT_BYTES || want > 0x10000) {
+        return -1;
+    }
+    dict_bytes += (want - ndslots) * (unsigned)sizeof(dword*);
+    free(dslot);
+    ndslots = want;
+    dslot = md_realloc(NULL, ndslots * (unsigned)sizeof(dword*));
+    memset(dslot, 0, ndslots * sizeof(dword*));
+    for (k = 0; k < ndict; k++) {
+        *dict_find(DW(k).s, DW(k).len) = &DW(k);
+    }
+
+    return 0;
+}
+
+/* A new word into the dictionary, in the slot sp: it, or NULL if there is
+ * no room for it. */
+static dword* dict_add(const uint8_t* w, unsigned len, dword** sp)
+{
+    unsigned k = ndict;
+    unsigned more = len + (k % DICT_BLOCK ? 0 : DICT_BLOCK * (unsigned)sizeof(dword))
+                    + (len > dtext_left ? DICT_TEXT : 0);
+
+    if (k == DICT_MAX || dict_bytes + more > DICT_BYTES) {
+        return NULL;
+    }
+    if (!dict_block[k / DICT_BLOCK]) {
+        dict_block[k / DICT_BLOCK] = md_realloc(NULL, DICT_BLOCK * (unsigned)sizeof(dword));
+    }
+    if (len > dtext_left) {
+        if (ndtext_chunks == dtext_chunks_cap) {
+            dtext_chunks_cap += 32;
+            dtext_chunks = md_realloc(dtext_chunks, dtext_chunks_cap * (unsigned)sizeof(uint8_t*));
+        }
+        dtext = dtext_chunks[ndtext_chunks++] = md_realloc(NULL, DICT_TEXT);
+        dtext_left = DICT_TEXT;
+    }
+    dict_bytes += more;
+    memcpy(dtext, w, len);
+    DW(k).s = dtext;
+    DW(k).len = (uint8_t)len;
+    DW(k).last = 0;
+    DW(k).count = 0;
+    DW(k).id = (uint16_t)k;
+    DW(k).stop = 0;
+    dtext += len;
+    dtext_left -= len;
+    *sp = &DW(k);
+    ndict++;
+
+    return *sp;
+}
+
+/* The dictionary begun with the stop words, so that a word's one look in
+ * it says if it is one. 0, or -1. */
+static int dict_begin(void)
+{
+    int k;
+
+    if (dict_slots() != 0) {
+        return -1;
+    }
+    for (k = 0; k < NSTOP; k++) {
+        const uint8_t* w = (const uint8_t*)STOP[k];
+        uint8_t len = (uint8_t)strlen(STOP[k]);
+        dword* d;
+
+        if (len < 2) {
+            continue;                   /* the hash reads two letters; no word here is one */
+        }
+        d = dict_add(w, len, dict_find(w, len));
+        if (!d) {
+            return -1;
+        }
+        d->stop = 1;
+    }
+
+    return 0;
+}
+
+/* A word of the topic: nothing if it is a stop word; a posting, if it is
+ * the dictionary's -- or comes into it -- and the topic has not used it
+ * yet; else as the word. */
+static void word_seen(const uint8_t* w, unsigned len, unsigned h, int in_title)
+{
+    dword* d = NULL;
+
+    if (!dslot && !dict_full && dict_begin() != 0) {
+        dict_full = 1;
+    }
+    if (dslot) {
+        dword** sp = dict_find_h(w, (uint8_t)len, h);
+
+        d = *sp;
+        if (!d && !dict_full) {
+            if (ndict * 2 >= ndslots) {
+                if (dict_slots() != 0) {
+                    dict_full = 1;
+                } else {
+                    sp = dict_find_h(w, (uint8_t)len, h);  /* the table is new */
+                }
+            }
+            if (!dict_full && (d = dict_add(w, len, sp)) == NULL) {
+                dict_full = 1;
+            }
+        }
+    }
+    if (!d) {
+        if (!is_stop((const char*)w, (int)len)) {
+            text_word((const char*)w, (int)len, (int)word_topic, in_title);     /* as the word */
+        }
+
+        return;
+    }
+    if (d->stop) {
+        return;
+    }
+    if (d->last != word_topic + 1) {
+        uint8_t* r;
+
+        d->last = (uint16_t)(word_topic + 1);
+        d->count++;
+        if (wlen + 5 > wcap) {
+            wcap = (wlen + 5) * 2;
+            wbuf = md_realloc(wbuf, wcap);
+        }
+        r = wbuf + wlen;
+        r[0] = POSTING;
+        r[1] = (uint8_t)(d->id & 0xFF);
+        r[2] = (uint8_t)(d->id >> 8);
+        r[3] = (uint8_t)(word_topic & 0xFF);
+        r[4] = (uint8_t)(word_topic >> 8 | (unsigned)in_title << 7);
+        wlen += 5;
+    }
+}
+
 void words_begin(int t)
 {
     if (!slot) {
@@ -679,9 +905,15 @@ void words_begin(int t)
     memset(slot, 0, nslots * sizeof(uint16_t));
 }
 
+static void title_text_word(const char* w, int len, int topic, int in_title)
+{
+    (void)topic;
+    word_seen((const uint8_t*)w, (unsigned)len, dict_hash((const uint8_t*)w, (unsigned)len), in_title);
+}
+
 void words_text(const char* plain, int in_title)
 {
-    each_word(plain, 3, text_word, (int)word_topic, in_title);
+    each_word(plain, 3, title_text_word, (int)word_topic, in_title);
 }
 
 /* The words of a topic's markup, read as it is: blocks, each a three-byte
@@ -704,6 +936,8 @@ void words_markup(const uint8_t* m, unsigned n)
             uint8_t* o = w;
             uint8_t kind = 0;
             uint8_t c;
+            uint8_t ha = 0;                 /* dict_hash, as the word is read */
+            uint8_t hb = 1;
             int len;
 
             while (!word_char[*s]) {
@@ -718,6 +952,8 @@ void words_markup(const uint8_t* m, unsigned n)
                 if ((c = word_char[b]) != 0) {
                     if (o < w + WORD_MAX) {
                         *o++ = c;
+                        ha = md_pearson[ha ^ c];
+                        hb = md_pearson[hb ^ c];
                     }
                     kind |= word_kind[b];
                     s++;
@@ -730,8 +966,8 @@ void words_markup(const uint8_t* m, unsigned n)
                 }
             }
             len = (int)(o - w);
-            if (len >= 3 && kind == (NOT_DIGIT | REAL) && !is_stop((const char*)w, len)) {
-                text_word((const char*)w, len, (int)word_topic, 0);
+            if (len >= 3 && kind == (NOT_DIGIT | REAL)) {
+                word_seen(w, (unsigned)len, (unsigned)hb << 8 | ha, 0);   /* a stop word is found as one there */
             }
         }
 next_block:
@@ -943,14 +1179,19 @@ static int make_runs(unsigned long* starts)
         unsigned rest = have - at;
         unsigned k;
 
-        /* The next record, whole, into the run -- or the run out. */
-        if (rest == 0 || rest < 1u + in[at] + 2u) {
+        /* The next record, whole, into the run -- or the run out. A
+         * posting is the dictionary's, and passed over. */
+        if (rest == 0 || rest < (in[at] ? 1u + in[at] + 2u : 5u)) {
             memmove(in, in + at, rest);
             have = rest + words_get(in + rest, RUN_WIN - rest);
             at = 0;
             rest = have;
         }
-        if (rest >= 3 && rest >= 1u + in[at] + 2u && used + 1u + in[at] + 2u <= RUN) {
+        if (rest >= 5 && in[at] == POSTING) {
+            at += 5;
+            continue;
+        }
+        if (rest >= 3 && in[at] && rest >= 1u + in[at] + 2u && used + 1u + in[at] + 2u <= RUN) {
             unsigned size = 1u + in[at] + 2u;
 
             if (nrec == rec_cap) {
@@ -964,7 +1205,7 @@ static int make_runs(unsigned long* starts)
             at += size;
             continue;
         }
-        done = !(rest >= 3);
+        done = !(rest >= 3 && in[at]);
         if (nrec == 0) {
             continue;
         }
@@ -1064,25 +1305,292 @@ static uint8_t* stage_room(unsigned n)
     return stage + nstage;
 }
 
+/* --- writing the words ------------------------------------------------------------ */
+
+static uint8_t prev_key[WORD_MAX + 1];
+static unsigned dir_max;
+
+/* One word, len-prefixed, and its topics: tidied, front-coded against the
+ * one before, and staged. */
+static void emit_entry(const uint8_t* key, uint16_t* v, unsigned n)
+{
+    unsigned klen = key[0];
+    unsigned shared = 0;
+    unsigned at_topic = 0;
+    unsigned o;
+    unsigned j;
+
+    n = tidy(v, n);
+    if (words_section.count % BLOCK == 0) {
+        unsigned long at = words_section.len;   /* unsigned is 24 bits on the eZ80 */
+
+        words_section.dir = grow(words_section.dir, &dir_max, words_section.dir_len + 5 + klen);
+        words_section.dir[words_section.dir_len++] = (uint8_t)(at & 0xFF);
+        words_section.dir[words_section.dir_len++] = (uint8_t)(at >> 8);
+        words_section.dir[words_section.dir_len++] = (uint8_t)(at >> 16);
+        words_section.dir[words_section.dir_len++] = (uint8_t)(at >> 24);
+        words_section.dir[words_section.dir_len++] = (uint8_t)klen;
+        memcpy(words_section.dir + words_section.dir_len, key + 1, klen);
+        words_section.dir_len += klen;
+        prev_key[0] = 0;
+    }
+    while (shared < 255 && shared < prev_key[0] && shared < klen && prev_key[1 + shared] == key[1 + shared]) {
+        shared++;
+    }
+    {
+        uint8_t* q = stage_room(2 + WORD_MAX + 4);
+
+        q[0] = (uint8_t)shared;
+        q[1] = (uint8_t)(klen - shared);
+        memcpy(q + 2, key + 1 + shared, klen - shared);
+        o = 2 + klen - shared;
+        o += varint(q + o, n);
+        nstage += o;
+        words_section.len += o;
+    }
+    for (j = 0; j < n; j++) {
+        unsigned t = v[j] & 0x7FFF;
+
+        o = varint(stage_room(4), (t - at_topic) << 1 | (unsigned)(v[j] >> 15));
+        nstage += o;
+        words_section.len += o;
+        at_topic = t;
+    }
+    memcpy(prev_key, key, klen + 1);
+    words_section.count++;
+}
+
+/* The words found as words, a word at a time from their sorted runs:
+ * live holds the runs not yet done -- at most MAX_RUNS, so looking at each
+ * for every word is a constant a word -- and first each one's current
+ * word's first two letters, which settle most comparisons. Gathered in
+ * the runs' order, a word's topics come nearly in order, as tidy wants. */
+static window* ov_win;
+static window** ov_live;
+static unsigned ov_nlive;
+static uint8_t ov_key[WORD_MAX + 1];
+static uint16_t* ov_v;
+static unsigned ov_n;
+static unsigned ov_cap;
+static int ov_have;             /* ov_key and its topics are the next word */
+
+static void ov_next(void)
+{
+    static unsigned eq[MAX_RUNS];
+    window* least;
+    unsigned klen;
+    unsigned neq = 0;
+    unsigned j;
+    unsigned k;
+
+    ov_have = 0;
+    ov_n = 0;
+    if (ov_nlive == 0) {
+        return;
+    }
+    least = ov_live[0];
+    eq[neq++] = 0;
+    for (k = 1; k < ov_nlive; k++) {
+        window* w = ov_live[k];
+        int c = w->first < least->first ? -1 : w->first > least->first ? 1
+                : key_cmp(w->buf + w->at, least->buf + least->at);
+
+        if (c < 0) {
+            least = w;
+            neq = 0;
+            eq[neq++] = k;
+        } else if (c == 0) {
+            eq[neq++] = k;
+        }
+    }
+    klen = least->buf[least->at];
+    memcpy(ov_key, least->buf + least->at, klen + 1);
+    for (j = 0; j < neq; j++) {
+        window* w = ov_live[eq[j]];
+
+        do {
+            const uint8_t* p = w->buf + w->at + 1 + klen;
+
+            if (ov_n == ov_cap) {
+                ov_cap = ov_cap ? ov_cap * 2 : 64;
+                ov_v = md_realloc(ov_v, ov_cap * (unsigned)sizeof(uint16_t));
+            }
+            ov_v[ov_n++] = (uint16_t)(p[0] | p[1] << 8);
+            w->at += 1 + klen + 2;
+        } while (ready(w) && key_cmp(w->buf + w->at, ov_key) == 0);
+        w->first = ready(w) ? first_of(w) : 0;
+    }
+    /* The runs that are done, out of live: from the back, so the indexes
+     * in eq still hold -- the order of the rest kept. */
+    for (j = neq; j-- > 0;) {
+        if (!ready(ov_live[eq[j]])) {
+            ov_nlive--;
+            memmove(ov_live + eq[j], ov_live + eq[j] + 1, (ov_nlive - eq[j]) * sizeof(window*));
+        }
+    }
+    ov_have = 1;
+}
+
+/* The words found as words that come before key (len-prefixed; NULL for
+ * all that are left), written. */
+static void ov_before(const uint8_t* key)
+{
+    while (ov_have && (!key || key_cmp(ov_key, key) < 0)) {
+        emit_entry(ov_key, ov_v, ov_n);
+        ov_next();
+    }
+}
+
+/* A dictionary word, to sort: walked by pointer, so no multiply finds one. */
+typedef struct {
+    const uint8_t* s;
+    uint16_t id;
+    uint8_t len;
+} wref;
+
+static int wref_before(const wref* x, const wref* y)
+{
+    int c;
+
+    if (x->s[0] != y->s[0]) {
+        return x->s[0] < y->s[0];
+    }
+    c = memcmp(x->s, y->s, x->len < y->len ? x->len : y->len);
+
+    return c ? c < 0 : x->len < y->len;
+}
+
+/* The words in order: merged, runs of 1, 2, 4 ... through tmp. */
+static wref* sort_words(wref* from, wref* to, unsigned n)
+{
+    unsigned width;
+
+    for (width = 1; width < n; width *= 2) {
+        unsigned lo;
+
+        for (lo = 0; lo < n; lo += 2 * width) {
+            unsigned mid = lo + width < n ? lo + width : n;
+            unsigned hi = mid + width < n ? mid + width : n;
+            const wref* a = from + lo;
+            const wref* a_end = from + mid;
+            const wref* b = a_end;
+            const wref* b_end = from + hi;
+            wref* o = to + lo;
+
+            while (a < a_end && b < b_end) {
+                *o++ = wref_before(b, a) ? *b++ : *a++;
+            }
+            while (a < a_end) {
+                *o++ = *a++;
+            }
+            while (b < b_end) {
+                *o++ = *b++;
+            }
+        }
+        {
+            wref* t = from;
+
+            from = to;
+            to = t;
+        }
+    }
+
+    return from;
+}
+
+/* The postings are gathered a range of words at a time, each word's in a
+ * slice of a block, no slice across two, the blocks GATHER_BLOCK each and
+ * GATHER_BYTES at most: blocks, as at the end the heap is in pieces, and
+ * a range as wide as fits, as each is a pass over the words file. */
+#define GATHER_BLOCK 4096
+#define GATHER_BYTES (48 * 1024)
+
+static uint16_t* rank_of;           /* each word's rank, by its number: 0xFFFF for none */
+
+/* The dictionary's postings for the words ranked r0 to r1, each into its
+ * slice: one pass over the words file. 0, or -1. */
+static int gather(unsigned r0, unsigned r1, uint16_t** slice, uint16_t* fill)
+{
+    static uint8_t in[RUN_WIN];
+    unsigned have = 0;
+    unsigned at = 0;
+
+    if (words_rewind() != 0) {
+        return -1;
+    }
+    for (;;) {
+        unsigned rest = have - at;
+
+        if (rest == 0 || rest < (in[at] ? 1u + in[at] + 2u : 5u)) {
+            memmove(in, in + at, rest);
+            have = rest + words_get(in + rest, RUN_WIN - rest);
+            at = 0;
+            rest = have;
+            if (rest == 0 || rest < (in[0] ? 1u + in[0] + 2u : 5u)) {
+                return 0;
+            }
+        }
+        if (in[at] == POSTING) {
+            unsigned r = rank_of[in[at + 1] | (unsigned)in[at + 2] << 8];
+
+            if (r >= r0 && r < r1) {
+                r -= r0;
+                slice[r][fill[r]++] = (uint16_t)(in[at + 3] | in[at + 4] << 8);
+            }
+            at += 5;
+        } else {
+            at += 1u + in[at] + 2u;
+        }
+    }
+}
+
+static void free_dictionary(void)
+{
+    unsigned k;
+
+    for (k = 0; k < DICT_MAX / DICT_BLOCK; k++) {
+        free(dict_block[k]);
+        dict_block[k] = NULL;
+    }
+    for (k = 0; k < ndtext_chunks; k++) {
+        free(dtext_chunks[k]);
+    }
+    free(dtext_chunks);
+    free(dslot);
+    dtext_chunks = NULL;
+    dslot = NULL;
+    ndict = ndslots = ndtext_chunks = dtext_chunks_cap = dict_bytes = dtext_left = 0;
+}
+
 int write_words(void (*emit)(const void* p, unsigned n))
 {
     static unsigned long starts[MAX_RUNS + 1];
     static uint8_t key[WORD_MAX + 1];
-    static uint8_t prev[WORD_MAX + 1];
-    static unsigned eq[MAX_RUNS];
-    window* win;
-    window** live;              /* pointers, as indexing windows is a multiply */
-    unsigned nlive;
-    uint16_t* v = NULL;
-    unsigned vcap = 0;
-    unsigned dmax = 0;
+    uint16_t* ids = NULL;
+    uint16_t* fill = NULL;
+    uint16_t** slice = NULL;
+    uint16_t** blocks = NULL;
+    unsigned nranked = 0;
+    unsigned r0;
+    unsigned k;
     int nruns;
     int r;
+    int failed = 0;
 
     words_section.len = 0;
     words_section.dir_len = 0;
     words_section.dir = NULL;
     words_section.count = 0;
+    prev_key[0] = 0;
+    dir_max = 0;
+    stage_to = emit;
+    nstage = 0;
+
+    free(dslot);                        /* the dictionary is looked in no more */
+    dslot = NULL;
+    ndslots = 0;
+
+    /* The words found as words, into sorted runs, made ready to merge. */
     run = md_realloc(NULL, RUN);
     sorted = md_realloc(NULL, RUN);
     nruns = make_runs(starts);
@@ -1096,131 +1604,113 @@ int write_words(void (*emit)(const void* p, unsigned n))
     if (nruns < 0) {
         return -1;
     }
-    win = md_realloc(NULL, (unsigned)(nruns + 1) * (unsigned)sizeof(window));
+    ov_win = md_realloc(NULL, (unsigned)(nruns + 1) * (unsigned)sizeof(window));
+    ov_live = md_realloc(NULL, (unsigned)(nruns + 1) * (unsigned)sizeof(window*));
+    ov_nlive = 0;
     for (r = 0; r < nruns; r++) {
-        win[r].pos = starts[r];
-        win[r].end = starts[r + 1];
-        win[r].have = win[r].at = 0;
-    }
-    prev[0] = 0;
-    stage_to = emit;
-    nstage = 0;
+        window* w = ov_win + r;
 
-    /* Merged: the least word of the runs' current records, from each run
-     * that has it, its topics gathered; then written. live holds the runs
-     * not yet done -- at most MAX_RUNS, so looking at each for every word
-     * is a constant a word -- and first each one's current word's first
-     * two letters, which settle most comparisons. Gathered in the runs'
-     * order, a word's topics come nearly in order, as tidy wants them. */
-    live = md_realloc(NULL, (unsigned)(nruns + 1) * (unsigned)sizeof(window*));
-    nlive = 0;
-    for (r = 0; r < nruns; r++) {
-        window* w = win + r;
-
+        w->pos = starts[r];
+        w->end = starts[r + 1];
+        w->have = w->at = 0;
         if (ready(w)) {
-            live[nlive++] = w;
+            ov_live[ov_nlive++] = w;
             w->first = first_of(w);
         }
     }
-    for (;;) {
-        window* least;
+    ov_next();
+
+    /* The dictionary sorted, and gathered a range of words at a time,
+     * each written after the words found as words that come before it. */
+    if (ndict) {
         unsigned n = 0;
-        unsigned klen;
-        unsigned shared = 0;
-        unsigned o;
-        unsigned j;
-        unsigned at_topic = 0;
-        unsigned neq = 0;
-        unsigned k;
 
-        if (nlive == 0) {
-            break;
-        }
-        least = live[0];
-        eq[neq++] = 0;
-        for (k = 1; k < nlive; k++) {
-            window* w = live[k];
-            int c = w->first < least->first ? -1 : w->first > least->first ? 1
-                    : key_cmp(w->buf + w->at, least->buf + least->at);
+        wref* w = md_realloc(NULL, ndict * (unsigned)sizeof(wref));
+        wref* w2 = md_realloc(NULL, ndict * (unsigned)sizeof(wref));
+        wref* o = w;
+        wref* sorted_w;
 
-            if (c < 0) {
-                least = w;
-                neq = 0;
-                eq[neq++] = k;
-            } else if (c == 0) {
-                eq[neq++] = k;
+        ids = md_realloc(NULL, ndict * (unsigned)sizeof(uint16_t));
+        rank_of = md_realloc(NULL, ndict * (unsigned)sizeof(uint16_t));
+        for (k = 0; k < ndict; k++) {
+            const dword* d = &DW(k);
+
+            rank_of[k] = 0xFFFF;            /* no rank: a stop word, never a topic's */
+            if (d->count) {
+                o->s = d->s;
+                o->len = d->len;
+                o->id = (uint16_t)k;
+                o++;
             }
         }
-        klen = least->buf[least->at];
-        memcpy(key, least->buf + least->at, klen + 1);
-        for (j = 0; j < neq; j++) {
-            window* w = live[eq[j]];
-
-            do {
-                const uint8_t* p = w->buf + w->at + 1 + klen;
-
-                if (n == vcap) {
-                    vcap = vcap ? vcap * 2 : 64;
-                    v = md_realloc(v, vcap * (unsigned)sizeof(uint16_t));
-                }
-                v[n++] = (uint16_t)(p[0] | p[1] << 8);
-                w->at += 1 + klen + 2;
-            } while (ready(w) && key_cmp(w->buf + w->at, key) == 0);
-            w->first = ready(w) ? first_of(w) : 0;
+        n = (unsigned)(o - w);
+        sorted_w = sort_words(w, w2, n);
+        for (k = 0, o = sorted_w; k < n; k++, o++) {
+            ids[k] = o->id;
+            rank_of[o->id] = (uint16_t)k;
         }
-        /* The runs that are done, out of live: from the back, so the
-         * indexes in eq still hold -- the order of the rest kept. */
-        for (j = neq; j-- > 0;) {
-            if (!ready(live[eq[j]])) {
-                nlive--;
-                memmove(live + eq[j], live + eq[j] + 1, (nlive - eq[j]) * sizeof(window*));
-            }
-        }
-        n = tidy(v, n);
-
-        if (words_section.count % BLOCK == 0) {
-            unsigned long at = words_section.len;   /* unsigned is 24 bits on the eZ80 */
-
-            words_section.dir = grow(words_section.dir, &dmax, words_section.dir_len + 5 + klen);
-            words_section.dir[words_section.dir_len++] = (uint8_t)(at & 0xFF);
-            words_section.dir[words_section.dir_len++] = (uint8_t)(at >> 8);
-            words_section.dir[words_section.dir_len++] = (uint8_t)(at >> 16);
-            words_section.dir[words_section.dir_len++] = (uint8_t)(at >> 24);
-            words_section.dir[words_section.dir_len++] = (uint8_t)klen;
-            memcpy(words_section.dir + words_section.dir_len, key + 1, klen);
-            words_section.dir_len += klen;
-            prev[0] = 0;
-        }
-        while (shared < 255 && shared < prev[0] && shared < klen && prev[1 + shared] == key[1 + shared]) {
-            shared++;
-        }
-        {
-            uint8_t* q = stage_room(2 + WORD_MAX + 4);
-
-            q[0] = (uint8_t)shared;
-            q[1] = (uint8_t)(klen - shared);
-            memcpy(q + 2, key + 1 + shared, klen - shared);
-            o = 2 + klen - shared;
-            o += varint(q + o, n);
-            nstage += o;
-            words_section.len += o;
-        }
-        for (j = 0; j < n; j++) {
-            unsigned t = v[j] & 0x7FFF;
-
-            o = varint(stage_room(4), (t - at_topic) << 1 | (unsigned)(v[j] >> 15));
-            nstage += o;
-            words_section.len += o;
-            at_topic = t;
-        }
-        memcpy(prev, key, klen + 1);
-        words_section.count++;
+        free(w2);
+        free(w);
+        nranked = n;
+        fill = md_realloc(NULL, (n + 1) * (unsigned)sizeof(uint16_t));
+        slice = md_realloc(NULL, (n + 1) * (unsigned)sizeof(uint16_t*));
+        blocks = md_realloc(NULL, (n + 1) * (unsigned)sizeof(uint16_t*));
     }
+    for (r0 = 0; r0 < nranked && !failed;) {
+        unsigned r1 = r0;
+        unsigned bytes = 0;
+        unsigned left = 0;              /* in the block being filled */
+        uint16_t* at = NULL;
+        unsigned nblocks = 0;
+
+        while (r1 < nranked) {
+            unsigned need = DW(ids[r1]).count * (unsigned)sizeof(uint16_t);
+
+            if (need > left) {
+                unsigned size = need > GATHER_BLOCK ? need : GATHER_BLOCK;
+
+                if (r1 > r0 && bytes + size > GATHER_BYTES) {
+                    break;              /* the rest in the next range */
+                }
+                at = blocks[nblocks++] = md_realloc(NULL, size);
+                bytes += size;
+                left = size;
+            }
+            slice[r1 - r0] = at;
+            fill[r1 - r0] = 0;
+            at += DW(ids[r1]).count;
+            left -= need;
+            r1++;
+        }
+        failed = gather(r0, r1, slice, fill) != 0;
+        for (k = r0; k < r1 && !failed; k++) {
+            const dword* d = &DW(ids[k]);
+
+            key[0] = d->len;
+            memcpy(key + 1, d->s, d->len);
+            ov_before(key);
+            emit_entry(key, slice[k - r0], fill[k - r0]);
+        }
+        while (nblocks) {
+            free(blocks[--nblocks]);
+        }
+        r0 = r1;
+    }
+    ov_before(NULL);
     stage_flush();
     words_section.blocks = (words_section.count + BLOCK - 1) / BLOCK;
-    free(live);
-    free(win);
-    free(v);
+    free(ov_live);
+    free(ov_win);
+    free(ov_v);
+    ov_v = NULL;
+    ov_cap = 0;
+    free(ids);
+    free(fill);
+    free(slice);
+    free(blocks);
+    free(rank_of);
+    rank_of = NULL;
+    free_dictionary();
 
-    return 0;
+    return failed ? -1 : 0;
 }

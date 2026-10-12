@@ -547,6 +547,30 @@ class Md2ref(unittest.TestCase):
         self.assertEqual(text.count(b'\x14'), 300)
         self.assertNotIn(b'\x14\xff\xff', text)
 
+    def test_words_past_the_dictionary(self):
+        # More different words than the dictionary has room for: those found
+        # once it is full are kept as words, sorted on the card, and woven in
+        # among the dictionary's as the words are written -- in order, so a
+        # search finds the first, a middle and the last.
+        page = '# Many\n\n' + ''.join('## T%d\n\n%s\n\n' % (k, ' '.join(
+            'z%sq' % name for name in ['%05d' % (k * 100 + j) for j in range(100)])) for k in range(60))
+        p, data, left = compile_pages({'index.md': page})
+        self.assertEqual(p.returncode, 0, p.stdout)
+        self.assertIn('words %d\n' % (6000 + 1 + 50 + 1), ask(data, 'info'))  # many, t10-t59, section
+        got = ask(data, 'search', ['z00000q', 'z03017q', 'z05999q']).splitlines()
+        self.assertEqual([g.split()[1].split(':')[0] for g in got], ['1', '31', '60'])
+
+    def test_postings_past_one_gather(self):
+        # More postings than one pass gathers: the same 90 words in 400
+        # topics, gathered a range of words a pass, each word every topic.
+        common = ' '.join('w%sz' % chr(ord('a') + j % 26) * (1 + j // 26) for j in range(90))
+        page = '# Top\n\n' + ''.join('## Part %d\n\n%s\n\n' % (k, common) for k in range(400))
+        p, data, left = compile_pages({'index.md': page})
+        self.assertEqual(p.returncode, 0, p.stdout)
+        for word in ('waz', 'wlzwlz', 'wyzwyzwyz', 'wzz'):     # the last sort into a later pass
+            got = ask(data, 'search', [word]).splitlines()
+            self.assertEqual(got[0].split()[0], '400', word)
+
     def test_words_past_one_run(self):
         # More words than one 16 KB run of the words file holds: sorted in
         # runs, merged, every word still finds its topic.
