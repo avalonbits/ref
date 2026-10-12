@@ -2,27 +2,36 @@
 
 ref puts the community Agon documentation,
 [agon-docs](https://github.com/AgonPlatform/agon-docs), on the Agon: the
-whole wiki in one file on the SD card, and a viewer that reads it with
-seeks, follows its links and searches it as you type. It looks up APIs, VDU
-sequences, star commands and system variables however you write them:
-`vdu 23,27,&21`, `VDU 23 27 33` and `23;27;0x21` all find the same command.
+whole wiki in one file on the SD card, and a viewer to read it, follow its
+links and search it. It runs on the Agon Light, Light 2, Origins and
+Console8, under MOS 3.0.2.
 
-It runs on the Agon Light, Light 2, Origins and Console8, on MOS 3.0.2.
+## Installing
 
-## Using it
+Copy two files to the SD card:
+
+    /bin/ref.bin
+    /lib/ref/ref.dat
+
+There is no release to download yet. ref.dat is the wiki's own text, and
+agon-docs has no license, so until its maintainers settle one, build
+ref.dat yourself for your own card (see [Building](#building)).
+
+## Looking things up
 
     ref                     the contents, organised as the wiki is
-    ref <query>             look it up; search the text if no key matches
+    ref <query>             look it up; search the text if nothing matches
     ref -k <query>          look it up, and nothing else
     ref -s <words>          search the text
-    ref -p <query>          print what was found, instead of showing it
+    ref -p <query>          print what was found instead of showing it
     ref -f <file>           read another ref.dat
+    ref -v                  ref's version, and the agon-docs commit it holds
 
-Lookups know:
+A lookup knows:
 
 | Ask for | Like |
 |---|---|
-| VDU sequences, written any way MOS reads numbers | `ref vdu 23 27 3`, `ref 23,27,&21`, `ref vdu 23,0,&85,1,5,0` |
+| VDU sequences, numbers written any way MOS reads them | `ref vdu 23 27 3`, `ref 23,27,&21`, `ref vdu 23,0,&85,1,5,0` |
 | MOS API calls, by name or number | `ref mos_fopen`, `ref mos 0x0a` |
 | RST calls | `ref rst 08h`, `ref rst 8` |
 | C functions | `ref f_printf` |
@@ -32,63 +41,61 @@ Lookups know:
 | BBC BASIC keywords | `ref gcol` |
 | any word of a heading | `ref copper` |
 
-A buffered command's buffer ID and an audio command's channel can be
-anything: `vdu 23 0 &a0 7; 6` finds command 6 whichever buffer it names.
-A lookup that finds one topic opens it; several, a list to choose from.
+Case doesn't matter, and the parameters a command names before its number
+can be anything: `vdu 23 0 &a0 7; 6` finds buffered command 6 whichever
+buffer it names. A lookup that finds one topic opens it; more than one, a
+list to choose from.
 
-Reading a topic:
+ref returns 0 when it showed something and 100 when nothing matched, so a
+script can tell. ade's F1 runs `ref -k <word>` through hub this way.
 
-A cursor moves through the text, as in a text-mode browser; the link or
-heading under it is lit, and anywhere else the text cursor shows where it is.
+## Reading
+
+The screen has the wiki's title across the top, the text in the middle, and
+a status line at the bottom saying where the topic sits in the wiki and how
+far down you are. Links are green and headings yellow.
+
+A cursor moves through the text, as in a text-mode web browser. The link or
+heading under it is lit; anywhere else the text cursor shows where it is.
 
 | Key | Does |
 |---|---|
 | arrows | move the cursor; the screen follows it |
-| PgUp, PgDn, Home, End | by the page, or to either end (Space and `b` page too) |
+| PgUp, PgDn, Home, End | a page up or down, or to either end (Space and `b` page too) |
 | Ctrl+Up, Ctrl+Down | the cursor to the previous or next heading |
-| Ctrl+Left, Ctrl+Right (or Shift+Tab, Tab) | the cursor to the previous or next link |
+| Ctrl+Left, Ctrl+Right | the cursor to the previous or next link (Shift+Tab and Tab too) |
 | Enter | follow the link under the cursor |
-| Ctrl+F | find words, from the top of the screen on, as aed finds |
+| Backspace, Alt+Left | back: to the link you followed, or to the contents, list or search you came from |
+| Alt+Right | forward |
+| Ctrl+F | find words, from the top of the screen down |
 | Ctrl+N, Ctrl+P | the next or previous match |
-| Backspace, Alt+Left / Alt+Right | back -- to the link you followed, or to the contents, list or find the topic was opened from -- / forward |
-| `n`, `p` | the next or previous topic |
+| `n`, `p` | the next or previous topic in the wiki |
 | `u` | the section the topic is in |
 | `t` | the contents |
-| `/`, F3 | find: each key typed narrows the list, keys first |
+| `/`, F3 | search: each key typed narrows the list, matching keys first |
 | `?`, F1 | the keys |
 | Esc, `q` | quit |
 
-ref returns 0 when it showed something and 100 when nothing matched, so a
-script -- or an IDE such as ade, whose F1 runs `ref -k <word>` through hub --
-can tell.
+In the contents, the arrows move, Right and Left open and close a section,
+and Enter opens a topic.
 
-## Installing
-
-ref.dat is the wiki's own text, and agon-docs has no license yet, so there
-is no release to download until its maintainers settle one: build ref.dat
-yourself (below), for your own card. Then copy `ref.bin` to `/bin` and
-`ref.dat` to `/lib/ref` on the SD card:
-
-    /bin/ref.bin
-    /lib/ref/ref.dat
+ref uses the screen mode and font already in use; under hub, the prompt's.
 
 ## Building
 
-ref.dat is built on a PC or Mac from agon-docs at the commit pinned in
-`SOURCE`; ref.bin with [agondev](https://github.com/AgonPlatform/agondev).
+ref.dat is built on a PC or Mac with Python 3.11 or later, from agon-docs
+at the commit pinned in [`SOURCE`](SOURCE). ref.bin is built with
+[agondev](https://github.com/AgonPlatform/agondev).
 
-    make dat            build/ fetches agon-docs and writes out/ref.dat
+    make dat            fetch agon-docs and write out/ref.dat
     make agon           bin/ref.bin
     make test           the builder's tests, and the reader core on the PC
-                        against the builder's own answers
-    make emu            ref in fab-agon-emulator: test/run.sh
-    test/core.sh        the reader core on the Agon, built by agondev and
-                        by acc, against the PC
+    make emu            ref in fab-agon-emulator
+    test/core.sh        the reader core on the Agon, built by agondev and acc
 
-When the wiki changes, move the commit in `SOURCE` and run `make dat`; the
-builder reports any heading its rules (`build/rules.toml`) no longer turn
-into a key, and any link it cannot resolve. The viewer only changes when the
-format does.
+When the wiki changes, move the commit in `SOURCE` and run `make dat`. The
+builder stops on a link it cannot resolve and lists any heading its rules,
+in [`build/rules.toml`](build/rules.toml), no longer turn into a key.
+ref.bin only needs rebuilding if the file format changes.
 
-[BRIEFING.md](BRIEFING.md) describes the design: the builder, the file, the
-viewer and how they are tested.
+[docs/DESIGN.md](docs/DESIGN.md) explains how ref works.

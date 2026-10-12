@@ -5,6 +5,10 @@ compiled into one file on the SD card and read with a viewer that runs on the
 Agon, with fast search over its APIs, VDU commands, star commands and topics.
 Read all of it before writing code.
 
+*This is the plan ref was built from, with the decisions made along the
+way. For how ref works now, see [docs/DESIGN.md](docs/DESIGN.md); for how
+to use it, [README.md](README.md).*
+
 ## What it is
 
 - **A builder** that runs on a PC or Mac. It fetches
