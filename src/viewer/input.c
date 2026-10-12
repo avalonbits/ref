@@ -9,6 +9,7 @@
  *   c:<x>          the character x          text:<s>   each character of s
  *   dump:<why>     not a key: write the screen to the transcript
  *   vdp:<why>      not a key: write what the VDP shows, read back from it
+ *   pixel:<x>,<y>  not a key: the colour of character cell x, y's middle pixel
  *
  * When the script runs out, every key is Esc, so ref always gets out.
  */
@@ -135,6 +136,14 @@ key in_wait(void)
         }
         if (strncmp(line, "dump:", 5) == 0) {
             scr_dump(line + 5);
+            continue;
+        }
+        if (strncmp(line, "pixel:", 6) == 0) {
+            int x = 0;
+            int y = 0;
+
+            sscanf(line + 6, "%d,%d", &x, &y);
+            scr_vdp_pixel(x, y);
             continue;
         }
         if (strncmp(line, "vdp:", 4) == 0) {

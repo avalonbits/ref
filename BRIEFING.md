@@ -318,7 +318,10 @@ core at least).
   rows that came into view; longer jumps redraw, as a run of scrolls costs
   more than one repaint. The contents and lists likewise redraw only the
   two rows a cursor move changes. The last row is a
-  status line: the topic's place in the tree, and how far down. Each row is
+  status line, edge to edge: the topic's place in the tree, and how far
+  down. Its last cell, the bottom right, cannot be printed in without the
+  VDP scrolling, so it is painted instead: a one-cell text viewport
+  cleared in the status colours (`VDU 28`, `VDU 12`, `VDU 26`). Each row is
   drawn whole and sent in one RST 18h call. Colours by role (text, emphasis,
   code, link, the selected link, headings, notes, status) mapped for 16, 4
   and 2 colour modes. *Decided* (an open question): the contents replace the

@@ -365,9 +365,26 @@ if [ -x "$EMU/fab-agon-emulator" ]; then
               "$(same "$t" screen "$margin" "$width")" yes
         check "  and the topic is there" "$(has "$(vdp_screen "$t" screen)" 'Draw current')" yes
         check "  laid out to the screen's width less a margin each side" \
-              "$(dump "$t" screen | awk '{ if (length > w) w = length } END { print w }')" "$width"
+              "$(dump "$t" screen | sed '$d' | awk '{ if (length > w) w = length } END { print w }')" "$width"
+        # From column 0; its text ends a space short of the last column,
+        # which is painted in its colour rather than printed in.
+        check "  and the status line edge to edge" \
+              "$(dump "$t" screen | tail -1 | awk '{ print length }')" "$((width + 2 * margin - 2))"
         check "  the margins are blank" "$(margins_blank "$t" screen "$margin" "$width")" yes
     done
+
+    # The status line, edge to edge on the real VDP: its first cell and its
+    # last -- the bottom right, painted rather than printed in -- are in
+    # its colour; a text row's edges, in the margins, are not.
+    sd=$(emu_card "$SCRIPTED")
+    printf 'VDU 22 3\r\nref -k vdu 23 27 3\r\n' > "$sd/autoexec.txt"
+    printf '%s\n' pixel:0,29 pixel:79,29 pixel:0,5 pixel:79,5 esc > "$sd/ref.keys"
+    emu_run "$sd" 300 full > /dev/null
+    t=$(tr -d '\r' < "$sd/ref.out" 2>/dev/null)
+    rm -rf "$sd"
+    check "mode 3: the status line runs from the first column to the last" \
+          "$(grep '^pixel' <<< "$t" | tr '\n' ' ')" \
+          "pixel 0,29 aaaaaa pixel 79,29 aaaaaa pixel 0,5 000000 pixel 79,5 000000 "
 
     # Scrolling a line or two moves the rows on the VDP rather than redrawing
     # them: the screen must still be what ref meant, in a topic, the

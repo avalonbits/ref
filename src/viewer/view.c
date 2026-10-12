@@ -480,7 +480,7 @@ static void draw_status(void)
     scr_colour(C_STATUS);
     {
         /* The end of the trail, after "...", if all of it does not fit. */
-        int room = scr_cols - 7;
+        int room = scr_status_cols - 7;
         const char* s = buf;
 
         scr_add(' ');
@@ -507,7 +507,7 @@ static void draw_status(void)
         }
         p[pl++] = '%';
         p[pl] = 0;
-        status_pad(scr_cols - pl - 1);
+        status_pad(scr_status_cols - pl - 1);
         scr_adds(p);
     }
     scr_end();

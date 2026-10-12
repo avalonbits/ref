@@ -17,6 +17,7 @@
 int scr_cols;
 int scr_rows;
 int scr_margin;
+int scr_status_cols;
 static int phys_cols;
 
 #define ROW_BYTES 600
@@ -24,6 +25,8 @@ static int phys_cols;
 static char row_buf[ROW_BYTES];
 static int row_len;
 static int row_x;
+static int row_limit;               /* the columns the row may use */
+static int row_full;                /* the status row: edge to edge */
 static int cur_role = -1;
 static int colours;
 
@@ -90,7 +93,8 @@ void scr_dump(const char* why)
 
     script_log("== %s", why);
     for (r = 0; r <= scr_rows && r < SHADOW_ROWS; r++) {
-        int n = scr_cols < SHADOW_COLS ? scr_cols : SHADOW_COLS;
+        int w = r == scr_rows ? scr_status_cols : scr_cols;
+        int n = w < SHADOW_COLS ? w : SHADOW_COLS;
 
         while (n > 0 && shadow[r][n - 1] == ' ') {
             n--;
@@ -118,6 +122,29 @@ void scr_dump(const char* why)
  * Only the full emulator's VDP answers; the CLI emulator's stand-in does not. */
 static int last_role;
 static void flush(void);
+
+/* The colour of the pixel in the middle of character cell x, y, as the VDP
+ * reports it (VDU 23,0,&84, in OS coordinates): what the full emulator's
+ * checks read where a character cannot be read back. */
+void scr_vdp_pixel(int x, int y)
+{
+    int ox = (x * 2 + 1) * 1280 / (phys_cols * 2);
+    int oy = 1023 - (y * 2 + 1) * 1024 / ((scr_rows + 1) * 2);
+    unsigned long c;
+
+    flush();
+    mos_clearvdpflags(vdp_pflag_point);
+    putch(23);
+    putch(0);
+    putch(0x84);
+    putch(ox & 0xff);
+    putch(ox >> 8);
+    putch(oy & 0xff);
+    putch(oy >> 8);
+    mos_waitforvdpflags(vdp_pflag_point);
+    c = (unsigned long)getsysvar_scrpixel();
+    script_log("pixel %d,%d %06lx", x, y, c & 0xffffffUL);
+}
 
 void scr_vdp_dump(const char* why)
 {
@@ -200,6 +227,7 @@ void scr_open(void)
     phys_cols = cols;
     scr_margin = cols >= 60 ? 2 : 1;
     scr_cols = cols - 2 * scr_margin;
+    scr_status_cols = cols - 1;
     scr_rows = rows - 1;
     cur_role = -1;
     put(23);                                /* the cursor off */
@@ -251,8 +279,11 @@ void scr_begin(int row)
     if (cur_role == C_SEL || cur_role == C_STATUS) {
         scr_colour(C_TEXT);
     }
+    /* The status row runs edge to edge; the text rows sit inside margins. */
+    row_full = row == scr_rows;
+    row_limit = row_full ? phys_cols - 1 : scr_cols;
     put(31);
-    put(scr_margin);
+    put(row_full ? 0 : scr_margin);
     put(row);
     row_x = 0;
 #ifdef REF_SCRIPT
@@ -265,7 +296,7 @@ void scr_begin(int row)
 
 void scr_add(int ch)
 {
-    if (row_x >= scr_cols) {
+    if (row_x >= row_limit) {
         return;
     }
     put(ch);
@@ -292,8 +323,20 @@ void scr_end(void)
     if (cur_role != C_STATUS && cur_role != C_SEL) {
         scr_colour(C_TEXT);
     }
-    while (row_x < scr_cols) {
+    while (row_x < row_limit) {
         scr_add(' ');
+    }
+    if (row_full) {
+        /* The bottom right cell cannot be printed in without the VDP
+         * scrolling the screen: clear it instead, as a one-cell viewport,
+         * in the row's colours. */
+        put(28);
+        put(phys_cols - 1);
+        put(scr_rows);
+        put(phys_cols - 1);
+        put(scr_rows);
+        put(12);
+        put(26);
     }
     flush();
 }
@@ -361,7 +404,7 @@ void scr_cursor(int x, int y, int show)
 {
     if (show) {
         put(31);
-        put(x + scr_margin);
+        put(y == scr_rows ? x : x + scr_margin);
         put(y);
     }
     put(23);

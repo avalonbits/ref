@@ -28,6 +28,8 @@ const char* ui_title_at(uint32_t off);
 
 extern int scr_cols;        /* the width text is laid out to: the screen less its margins */
 extern int scr_margin;      /* blank columns each side */
+extern int scr_status_cols; /* the status row's width: edge to edge, less the last column
+                               (which it paints, rather than printing in) */
 extern int scr_rows;        /* rows for text: the screen less the status line */
 
 /* Colours by role, mapped to the mode's palette. */
@@ -59,6 +61,7 @@ void scr_cursor(int x, int y, int show);
 /* Write what the screen shows now to the transcript, under a heading. */
 void scr_dump(const char* why);
 void scr_vdp_dump(const char* why);
+void scr_vdp_pixel(int x, int y);
 void script_log(const char* fmt, ...);
 void script_close(void);
 #endif
