@@ -21,11 +21,10 @@
 #define TITLE_MAX 256
 #define DEPTH     8
 
-topic* topics;
+topic* topic_block[(MAX_TOPICS + 1 + TOPIC_BLOCK - 1) / TOPIC_BLOCK];
 int ntopics;
 const char* book_title;
 
-static int max_topics;
 static int last_root = -1;
 static int made;
 static int top_is_heading;          /* this page's top is its level-1 heading, so far */
@@ -214,6 +213,14 @@ int book_starts_topic(const block* b)
 
 /* A topic, under parent, its heading kept: the page it is from will not
  * be. -1 if there are too many. */
+/* A block for topic ntopics, if it is the first of one. */
+static void more_topics(void)
+{
+    if (!topic_block[(unsigned)ntopics >> 8]) {
+        topic_block[(unsigned)ntopics >> 8] = md_realloc(NULL, TOPIC_BLOCK * (unsigned)sizeof(topic));
+    }
+}
+
 static int new_topic(const char* title, const block* b, int page, int level, int parent)
 {
     topic* t;
@@ -223,11 +230,8 @@ static int new_topic(const char* title, const block* b, int page, int level, int
 
         return -1;
     }
-    if (ntopics == max_topics) {
-        max_topics = max_topics ? max_topics + max_topics / 2 : 64;
-        topics = md_realloc(topics, (unsigned)max_topics * (unsigned)sizeof(topic));
-    }
-    t = &topics[ntopics];
+    more_topics();
+    t = &TOPIC(ntopics);
     memset(t, 0, sizeof *t);
     t->title = title;
     t->heading = b ? arena_strdup(b->text) : NULL;
@@ -238,10 +242,10 @@ static int new_topic(const char* title, const block* b, int page, int level, int
     t->parent = parent;
     t->first_child = t->last_child = t->next = -1;
     if (parent >= 0) {
-        topic* p = &topics[parent];
+        topic* p = &TOPIC(parent);
 
         if (p->last_child >= 0) {
-            topics[p->last_child].next = ntopics;
+            TOPIC(p->last_child).next = ntopics;
         } else {
             p->first_child = ntopics;
         }
@@ -249,7 +253,7 @@ static int new_topic(const char* title, const block* b, int page, int level, int
         p->nchildren++;
     } else {
         if (last_root >= 0) {
-            topics[last_root].next = ntopics;
+            TOPIC(last_root).next = ntopics;
         }
         last_root = ntopics;
     }
@@ -262,6 +266,7 @@ void book_page(int pi)
 {
     pages[pi].first_topic = ntopics;
     pages[pi].ntopics = 0;
+    pages[pi].patches_from = patch_count();
     depth = 0;
     nids = 0;
     top_is_heading = 0;
@@ -286,37 +291,36 @@ static int make_top(int pi)
 
         return -1;
     }
-    if (ntopics == max_topics) {
-        max_topics += max_topics / 2;
-        topics = md_realloc(topics, (unsigned)max_topics * (unsigned)sizeof(topic));
+    more_topics();
+    for (k = ntopics; k > f; k--) {
+        TOPIC(k) = TOPIC(k - 1);            /* the page's, one up: blocks are apart */
     }
-    memmove(&topics[f + 1], &topics[f], (unsigned)(ntopics - f) * sizeof(topic));
     ntopics++;
     /* Only the page's topics move, and only they refer to one another:
      * those before refer to earlier topics but for the root before the
      * page's, whose next is f -- the new top now, as it should be. */
     for (k = f + 1; k < ntopics; k++) {
-        shift(&topics[k].parent, f);
-        shift(&topics[k].first_child, f);
-        shift(&topics[k].last_child, f);
-        shift(&topics[k].next, f);
+        shift(&TOPIC(k).parent, f);
+        shift(&TOPIC(k).first_child, f);
+        shift(&TOPIC(k).last_child, f);
+        shift(&TOPIC(k).next, f);
     }
     for (k = 0; k < nids; k++) {
         if (ids[k].topic >= f) {
             ids[k].topic++;
         }
     }
-    memset(&topics[f], 0, sizeof(topic));
-    topics[f].title = title_from_name(pages[pi].name);
-    topics[f].page = pi;
-    topics[f].made = made++;
-    topics[f].level = 0;
-    topics[f].parent = -1;
-    topics[f].first_child = topics[f].last_child = f + 1;
-    topics[f].nchildren = 1;
-    topics[f].next = -1;
-    topics[f + 1].parent = f;
-    topics[f + 1].next = -1;
+    memset(&TOPIC(f), 0, sizeof(topic));
+    TOPIC(f).title = title_from_name(pages[pi].name);
+    TOPIC(f).page = pi;
+    TOPIC(f).made = made++;
+    TOPIC(f).level = 0;
+    TOPIC(f).parent = -1;
+    TOPIC(f).first_child = TOPIC(f).last_child = f + 1;
+    TOPIC(f).nchildren = 1;
+    TOPIC(f).next = -1;
+    TOPIC(f + 1).parent = f;
+    TOPIC(f + 1).next = -1;
     last_root = f;
     pages[pi].ntopics++;
     stack[0] = f;
@@ -352,7 +356,7 @@ int book_heading(int pi, const block* b)
     if (top_is_heading && b->level == 1 && pages[pi].ntopics > 0 && make_top(pi) != 0) {
         return -1;
     }
-    while (depth > 0 && topics[stack[depth - 1]].level >= b->level) {
+    while (depth > 0 && TOPIC(stack[depth - 1]).level >= b->level) {
         depth--;
     }
     t = new_topic(title_of(b->text), b, pi, b->level, depth ? stack[depth - 1] : -1);
@@ -382,6 +386,8 @@ void book_ids(int pi, int t, const block* b)
 /* Anchors: explicit {#id}s first, then each heading's slug, made unique as
  * Python-Markdown makes them (_1, _2 ...); then {#id}s on paragraphs and
  * table cells, leading to the topic they are in. */
+static void settle(int pi);
+
 void book_page_done(int pi)
 {
     page* p = &pages[pi];
@@ -389,9 +395,9 @@ void book_page_done(int pi)
     int k;
 
     for (t = p->first_topic; t < p->first_topic + p->ntopics; t++) {
-        if (topics[t].id) {
-            topics[t].anchor = topics[t].id;
-            add_anchor(pi, topics[t].id, t);
+        if (TOPIC(t).id) {
+            TOPIC(t).anchor = TOPIC(t).id;
+            add_anchor(pi, TOPIC(t).id, t);
         }
     }
     for (t = p->first_topic; t < p->first_topic + p->ntopics; t++) {
@@ -399,16 +405,16 @@ void book_page_done(int pi)
         char* a;
         int n = 1;
 
-        if (!topics[t].heading || topics[t].anchor) {
+        if (!TOPIC(t).heading || TOPIC(t).anchor) {
             continue;
         }
-        base = slugify(topics[t].title);
+        base = slugify(TOPIC(t).title);
         a = base;
         while (has_anchor(pi, a)) {
             a = arena_alloc((unsigned)strlen(base) + 8);
             sprintf(a, "%s_%d", base, n++);
         }
-        topics[t].anchor = a;
+        TOPIC(t).anchor = a;
         add_anchor(pi, a, t);
     }
     for (k = 0; k < nids; k++) {
@@ -416,6 +422,7 @@ void book_page_done(int pi)
     }
     nids = 0;
     p->done = 1;
+    settle(pi);
 }
 
 void number_topics(void)
@@ -424,32 +431,65 @@ void number_topics(void)
 
     final_of = md_realloc(NULL, (unsigned)(made + 1) * (unsigned)sizeof(int));
     for (t = 0; t < ntopics; t++) {
-        final_of[topics[t].made] = t;
+        final_of[TOPIC(t).made] = t;
     }
 }
 
 int book_done(const char* title)
 {
-    book_title = title ? agon_string(title) : ntopics ? topics[0].title : "";
+    book_title = title ? agon_string(title) : ntopics ? TOPIC(0).title : "";
 
     return ntopics ? 0 : -1;
 }
 
 /* --- links ------------------------------------------------------------------- */
 
-/* A link to a page not yet read: where it is, and what it names. */
+/* A link to a page not yet read: what it names, and where it is, kept
+ * only until that page is read -- then its topic goes into its patch, as
+ * acc settles a fixup as soon as its symbol is known, and it is freed: its
+ * record for the next, its text with the page's others. In blocks, which
+ * never move, with the free ones in a list. */
 typedef struct {
-    int page;               /* the page it leads to */
-    const char* frag;       /* the anchor there, or NULL for its top */
-    const char* href;       /* as written */
-    const char* from;       /* the page it is on, and the line */
+    const char* href;       /* as written, in the page's waiting_text */
+    int frag;               /* where the anchor starts in href, or -1 for the top */
+    int from;               /* the page it is on, and the line */
     int no;
-    unsigned topic;
+    int patch;              /* its last placeholder's patch, or -1 until written: a
+                             * link in a table's cell is written on each line it wraps
+                             * to, and each patch leads to the one before */
+    int next;               /* the next waiting for the same page, or the next free */
 } pending;
 
-static pending* links;
-static int nlinks;
-static int max_links;
+#define LINK_BLOCK 64
+#define MAX_LINK_BLOCKS 256
+
+static pending* link_block[MAX_LINK_BLOCKS];
+static int nlink_records;
+static int free_link = -1;
+static int last_link = -1;
+
+#define LINK(k) (link_block[(unsigned)(k) / LINK_BLOCK][(unsigned)(k) % LINK_BLOCK])
+
+/* A record for a link: a free one, or the next of a block. -1 if there
+ * are as many waiting as there may be. */
+static int new_link(void)
+{
+    int k = free_link;
+
+    if (k >= 0) {
+        free_link = LINK(k).next;
+
+        return k;
+    }
+    if (nlink_records == LINK_BLOCK * MAX_LINK_BLOCKS) {
+        return -1;
+    }
+    if (!link_block[nlink_records / LINK_BLOCK]) {
+        link_block[nlink_records / LINK_BLOCK] = md_realloc(NULL, LINK_BLOCK * (unsigned)sizeof(pending));
+    }
+
+    return nlink_records++;
+}
 
 /* The page a link names, from its file name (the pages are one folder), or
  * -1. */
@@ -533,48 +573,102 @@ int resolve_link(const page* p, int no, const char* href, int len)
         return t;
     }
 
-    /* Not read yet: settled at the end, as written. */
-    if (nlinks == max_links) {
-        max_links = max_links ? max_links * 2 : 64;
-        links = md_realloc(links, (unsigned)max_links * (unsigned)sizeof(pending));
+    /* Not read yet: settled when it is, waiting with that page. */
+    t = new_link();
+    if (t < 0) {
+        md_error(p->path, no, "too many links to pages not read yet (at most %d)",
+                 LINK_BLOCK * MAX_LINK_BLOCKS);
+
+        return -1;
     }
-    links[nlinks].page = pi;
-    links[nlinks].frag = flen ? arena_strdup(frag) : NULL;
-    links[nlinks].href = arena_strndup(href, (unsigned)len);
-    links[nlinks].from = p->path;
-    links[nlinks].no = no;
-    links[nlinks].topic = NONE;
-    nlinks++;
+    LINK(t).href = chunks_strndup(&pages[pi].waiting_text, href, (unsigned)len);
+    LINK(t).frag = flen ? plen + 1 : -1;
+    LINK(t).from = (int)(p - pages);
+    LINK(t).no = no;
+    LINK(t).patch = -1;
+    LINK(t).next = pages[pi].waiting;
+    pages[pi].waiting = t;
+    last_link = t;
 
     return PENDING;
 }
 
 int last_pending(void)
 {
-    return nlinks - 1;
+    return last_link;
+}
+
+void link_placed(int link, unsigned k)
+{
+    if (LINK(link).patch >= 0) {
+        set_patch(k, PATCH_CHAIN + (unsigned)LINK(link).patch);
+    }
+    LINK(link).patch = (int)k;
+}
+
+/* Page pi read: each link waiting for it settled, its topic into its
+ * patch, and freed; then the page's own placeholders, its menus' links to
+ * its topics, whose numbers are final now -- a page read later puts its
+ * topics after these. */
+static void settle(int pi)
+{
+    page* p = &pages[pi];
+    int k = p->waiting;
+    unsigned j;
+    int* at_made;
+    int m0 = p->ntopics ? TOPIC(p->first_topic).made : 0;
+    int t;
+
+    while (k >= 0) {
+        pending* l = &LINK(k);
+        int next = l->next;
+
+        t = anchor_topic(pi, l->frag >= 0 ? l->href + l->frag : NULL);
+        if (t < 0) {
+            unresolved(pages[l->from].path, l->no, l->href, (int)strlen(l->href));
+        }
+        for (j = (unsigned)l->patch; l->patch >= 0;) {
+            unsigned v = patch_value(j);
+
+            set_patch(j, t < 0 ? NONE : (unsigned)t);
+            if (v < PATCH_CHAIN) {
+                break;
+            }
+            j = v - (unsigned)PATCH_CHAIN;
+        }
+        l->next = free_link;
+        free_link = k;
+        k = next;
+    }
+    p->waiting = -1;
+    chunks_free(&p->waiting_text);
+
+    /* A topic's number as made, to its number: the page's were made one
+     * after another, from m0. */
+    for (t = p->first_topic; t < p->first_topic + p->ntopics; t++) {
+        if (TOPIC(t).made < m0) {
+            m0 = TOPIC(t).made;
+        }
+    }
+    at_made = md_realloc(NULL, (unsigned)(p->ntopics + 1) * (unsigned)sizeof(int));
+    for (t = p->first_topic; t < p->first_topic + p->ntopics; t++) {
+        at_made[TOPIC(t).made - m0] = t;
+    }
+    for (j = p->patches_from; j < patch_count(); j++) {
+        unsigned v = patch_value(j);
+
+        if (v >= PATCH_MADE && v < PATCH_CHAIN) {      /* not another page's links */
+            unsigned made_no = v - (unsigned)PATCH_MADE;
+
+            set_patch(j, made_no >= (unsigned)m0 && made_no - (unsigned)m0 < (unsigned)p->ntopics
+                         ? (unsigned)at_made[made_no - (unsigned)m0] : NONE);
+        }
+    }
+    free(at_made);
 }
 
 int resolve_pending(void)
 {
-    int k;
-
-    for (k = 0; k < nlinks; k++) {
-        pending* l = &links[k];
-        int t = anchor_topic(l->page, l->frag);
-
-        if (t < 0) {
-            unresolved(l->from, l->no, l->href, (int)strlen(l->href));
-            l->topic = NONE;
-        } else {
-            l->topic = (unsigned)t;
-        }
-    }
-
     return md_errors ? -1 : 0;
-}
-
-unsigned pending_topic(int link)
-{
-    return links[link].topic;
 }
 

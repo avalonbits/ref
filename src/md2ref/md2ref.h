@@ -76,6 +76,14 @@ typedef struct {
 arena_mark arena_here(void);
 void arena_back(arena_mark m);
 
+/* Chunks that never move, freed together: an arena of its own, for what
+ * lasts as long as something else -- a link's text, as long as the page
+ * it waits on is unread. */
+typedef struct chunk chunk;
+void* chunks_alloc(chunk** chunks, unsigned n);
+char* chunks_strndup(chunk** chunks, const char* s, unsigned n);
+void chunks_free(chunk** chunks);
+
 /* The source's arena: what parsing makes of the topic being read. */
 void* source_alloc(unsigned n);
 char* source_strndup(const char* s, unsigned n);
@@ -105,6 +113,9 @@ typedef struct {
     int first_topic;
     int ntopics;
     int done;               /* read: its anchors are known */
+    int waiting;            /* the first link waiting for it to be read, or -1 */
+    chunk* waiting_text;    /* those links' text, freed once they are settled */
+    unsigned patches_from;  /* the first patch made while it was read */
 } page;
 
 extern page* pages;
@@ -212,7 +223,13 @@ typedef struct {
     uint16_t packed;        /* compressed */
 } topic;
 
-extern topic* topics;
+/* The topics, in blocks of 256 that never move once made: a pointer to one
+ * holds, and the table grows without a realloc, which on the Agon holds
+ * the old and the new at once -- three times the table, at the size where
+ * the heap can least spare it. */
+#define TOPIC_BLOCK 256
+extern topic* topic_block[(MAX_TOPICS + 1 + TOPIC_BLOCK - 1) / TOPIC_BLOCK];
+#define TOPIC(t) (topic_block[(unsigned)(t) >> 8][(uint8_t)(t)])
 extern int ntopics;
 extern const char* book_title;
 
@@ -234,12 +251,14 @@ void book_page_done(int pi);
 int book_done(const char* title);
 /* A link's target topic, -1 (with an error or a warning), or PENDING. */
 int resolve_link(const page* p, int no, const char* href, int len);
-/* The link resolve_link last left PENDING; then, every page read, each
- * pending link's topic -- NONE for one that leads nowhere, an error, or
- * with -w a warning. 0, or -1. */
+/* The link resolve_link last left PENDING; and that link's placeholder
+ * written to the text file, as patch k. When the page it leads to is read
+ * (book_page_done), its topic goes into the patch -- NONE for one that
+ * leads nowhere, an error or with -w a warning -- and the link is freed.
+ * resolve_pending: 0, or -1 if there were errors. */
 int last_pending(void);
+void link_placed(int link, unsigned k);
 int resolve_pending(void);
-unsigned pending_topic(int link);
 
 /* --- markup ----------------------------------------------------------------------- */
 
@@ -311,10 +330,18 @@ int scratch_open(const char* out);
 void scratch_close(void);
 /* A topic's compressed text, at the end of the text: where it went. */
 unsigned long write_text(const uint8_t* p, unsigned n);
-/* A link's placeholder in the text, to patch with its topic: link, a
- * pending link's number, or LINK_TO(made) for a topic's number as made. */
+/* A placeholder's link, in a topic's marks: a pending link's number, or
+ * LINK_TO(made) for a topic's number as made. Its place in the text file,
+ * once written, is a patch: its index, and the number to put there or
+ * what it waits for, settled with set_patch. */
 #define LINK_TO(made) (-2 - (made))
-void add_patch(unsigned long at, int link);
+#define PATCH_WAITING 0x10000UL      /* a link's last placeholder, its page not read yet */
+#define PATCH_MADE    0x20000UL      /* + a topic's number as made, settled as its page is */
+#define PATCH_CHAIN   0x40000UL      /* + the patch of the same link's placeholder before */
+unsigned add_patch(unsigned long at, unsigned value);
+void set_patch(unsigned k, unsigned value);
+unsigned patch_count(void);
+unsigned patch_value(unsigned k);
 /* The words file: records appended; then read back from the start. */
 void words_put(const uint8_t* p, unsigned n);
 int words_rewind(void);

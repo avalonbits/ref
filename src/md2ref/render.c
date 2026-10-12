@@ -637,8 +637,8 @@ static void take_words(int t, unsigned start, const char* title)
 static int too_big(int t)
 {
     if (len > TOPIC_MAX) {
-        md_error(pages[topics[t].page].path, 0, "topic '%s' is too big (%u bytes, at most %u)",
-                 topics[t].title, len, (unsigned)TOPIC_MAX);
+        md_error(pages[TOPIC(t).page].path, 0, "topic '%s' is too big (%u bytes, at most %u)",
+                 TOPIC(t).title, len, (unsigned)TOPIC_MAX);
         len = 0;
         nmarks = 0;
 
@@ -650,7 +650,7 @@ static int too_big(int t)
 
 void render_topic(int t, const block* b, int n)
 {
-    topic* tp = &topics[t];
+    topic* tp = &TOPIC(t);
     const page* p = &pages[tp->page];
     held* h;
     unsigned packed;
@@ -681,8 +681,8 @@ void render_topic(int t, const block* b, int n)
     tp->own = len;
     tp->total = len;
     for (k = 0; k < nheld; k++) {
-        topics[hold[k].topic].total += len;
-        topics[hold[k].topic].descendants++;
+        TOPIC(hold[k].topic).total += len;
+        TOPIC(hold[k].topic).descendants++;
     }
     take_words(t, 0, tp->title);
 
@@ -716,13 +716,13 @@ static void add_menu(int t)
     put_ascii("In this section:");
     put(EM_OFF);
     put(END);
-    for (c = topics[t].first_child; c >= 0; c = topics[c].next) {
-        const char* s = topics[c].title;
+    for (c = TOPIC(t).first_child; c >= 0; c = TOPIC(c).next) {
+        const char* s = TOPIC(c).title;
 
-        block_head(B_PARA, c == topics[t].first_child, 0, 2, 4);
+        block_head(B_PARA, c == TOPIC(t).first_child, 0, 2, 4);
         put_ascii("- ");
         put(LINK);
-        add_mark(len, LINK_TO(topics[c].made));    /* it may yet move up */
+        add_mark(len, LINK_TO(TOPIC(c).made));    /* it may yet move up */
         put(NONE & 0xFF);
         put(NONE >> 8);
         while (*s) {
@@ -738,7 +738,7 @@ static void add_menu(int t)
  * with them, and written, its placeholders where write_book patches them. */
 static void complete(held* h)
 {
-    topic* tp = &topics[h->topic];
+    topic* tp = &TOPIC(h->topic);
     const uint8_t* text = h->packed;
     unsigned packed = h->packed_len;
     const unsigned* at = h->at;
@@ -776,7 +776,13 @@ static void complete(held* h)
         max_packed = packed;
     }
     for (k = 0; k < h->nmarks; k++) {
-        add_patch(where + at[k], h->marks[k].link);
+        int link = h->marks[k].link;
+
+        if (link >= 0) {                /* waiting for its page to be read */
+            link_placed(link, add_patch(where + at[k], PATCH_WAITING));
+        } else {                        /* a topic of this page, numbered when it is read */
+            add_patch(where + at[k], PATCH_MADE + (unsigned)(-2 - link));
+        }
     }
     free(h->packed);
     free(h->marks);
@@ -801,8 +807,8 @@ void render_top(int t)
     render_topic(t, NULL, 0);
     nheld = held_now + 1;
     for (k = t + 1; k < ntopics; k++) {
-        topics[t].total += topics[k].own;
-        topics[t].descendants++;
+        TOPIC(t).total += TOPIC(k).own;
+        TOPIC(t).descendants++;
     }
 }
 
@@ -828,8 +834,8 @@ int render_done(void)
         unsigned long v = 0;
         int k;
 
-        for (k = t; k <= t + topics[t].span; k++) {
-            v += topics[k].len;
+        for (k = t; k <= t + TOPIC(t).span; k++) {
+            v += TOPIC(k).len;
         }
         if (v > view_size) {
             view_size = v > 0xFFFFFUL ? 0xFFFFF : (unsigned)v;

@@ -475,6 +475,51 @@ class Md2ref(unittest.TestCase):
                     raw = subprocess.run([TOOL, f.name, 'views'], capture_output=True, check=True).stdout
                 self.assertEqual(hashlib.md5(raw).hexdigest(), want)
 
+    def test_a_wrapped_link_in_a_cell_to_a_later_page(self):
+        # A link in a table's cell is written on every line its label wraps
+        # to; each is a placeholder, and every one gets the topic once the
+        # page it leads to is read. (A page with a menu between, so that
+        # its own placeholders are settled while these still wait.)
+        cell = 'word ' * 12 + '[a link whose label runs over more than one line of the cell](c.md#target)'
+        pages = {
+            'a.md': '# A\n\n| one | two |\n|---|---|\n| %s | %s |\n' % (cell, cell),
+            'b.md': '# B\n\n' + filler('b', 200) + '## B1\n\ntext\n',
+            'c.md': '# C\n\n## Target\n\ntext\n',
+        }
+        p, data, left = compile_pages(pages)
+        self.assertEqual(p.returncode, 0, p.stdout)
+        text = b''.join(views(data))
+        self.assertGreaterEqual(text.count(b'\x14'), 4)        # at least two placeholders a cell
+        self.assertNotIn(b'\x14\xff\xff', text)                # and none left leading nowhere
+
+    def test_topics_past_a_block_and_moved_across_one(self):
+        # Topics are kept 256 to a block. A page whose second level-1
+        # heading makes the page its top moves its topics up one, here
+        # across the first block's end.
+        pages = {
+            'a.md': '# A\n\n' + ''.join('## T%d\n\ntext\n\n' % k for k in range(248)),
+            'b.md': '# B1\n\n' + ''.join('## S%d\n\ntext\n\n' % k for k in range(20)) + '# B2\n\ntext\n',
+        }
+        p, data, left = compile_pages(pages)
+        self.assertEqual(p.returncode, 0, p.stdout)
+        got = [line.strip().rsplit('  [', 1) for line in ask(data, 'contents').splitlines()]
+        self.assertEqual([g[0] for g in got[249:]],
+                         ['b', 'B1'] + ['S%d' % k for k in range(20)] + ['B2'])
+        self.assertEqual([g[1] for g in got[249:]], ['%d]' % k for k in range(249, 272)])
+
+    def test_many_links_to_a_page_read_later(self):
+        # More placeholders than a block of patches holds, all waiting for
+        # the page they lead to: each gets its topic when it is read.
+        pages = {
+            'a.md': '# A\n\n' + ''.join('- [x%d](b.md#t%d)\n' % (k, k % 3) for k in range(300)),
+            'b.md': '# B\n\n## T0\n\nzero\n\n## T1\n\none\n\n## T2\n\ntwo\n',
+        }
+        p, data, left = compile_pages(pages)
+        self.assertEqual(p.returncode, 0, p.stdout)
+        text = b''.join(views(data))
+        self.assertEqual(text.count(b'\x14'), 300)
+        self.assertNotIn(b'\x14\xff\xff', text)
+
     def test_words_past_one_run(self):
         # More words than one 16 KB run of the words file holds: sorted in
         # runs, merged, every word still finds its topic.

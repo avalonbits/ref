@@ -59,6 +59,7 @@ static int add_page(const char* path)
     p = &pages[npages++];
     p->path = arena_strdup(path);
     p->name = slash ? p->path + (slash - path) + 1 : p->path;
+    p->waiting = -1;                /* no link waits for it yet */
 
     return 0;
 }

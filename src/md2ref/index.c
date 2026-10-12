@@ -475,11 +475,11 @@ void make_keys(void)
     interned_keys = arena_here();
     new_entries();
     for (t = 0; t < ntopics; t++) {
-        const char* h = topics[t].heading;
+        const char* h = TOPIC(t).heading;
         int i;
         int got = 0;
 
-        each_word(topics[t].title, 2, title_word, t, 0);
+        each_word(TOPIC(t).title, 2, title_word, t, 0);
         if (!h) {
             continue;
         }
@@ -490,8 +490,8 @@ void make_keys(void)
                 got = 1;
             }
         }
-        if (!got && (strncmp(topics[t].title, "VDU ", 4) == 0 || strncmp(topics[t].title, "vdu ", 4) == 0)
-            && vdu_key(topics[t].title, key)) {
+        if (!got && (strncmp(TOPIC(t).title, "VDU ", 4) == 0 || strncmp(TOPIC(t).title, "vdu ", 4) == 0)
+            && vdu_key(TOPIC(t).title, key)) {
             add_entry(key, (int)strlen(key), t, 0);
         }
     }
@@ -621,7 +621,7 @@ void words_begin(int t)
         slot_cap = FIRST_SLOTS;
         slot = md_realloc(NULL, slot_cap * (unsigned)sizeof(uint16_t));
     }
-    word_topic = (unsigned)topics[t].made;
+    word_topic = (unsigned)TOPIC(t).made;
     wlen = 0;
     nwords = 0;
     nslots = FIRST_SLOTS;

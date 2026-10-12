@@ -70,7 +70,6 @@ static FILE* errors;        /* -e */
  * chunk of its own, kept behind it, so the room left in the one in use is
  * not lost. The chunks are numbered as made, which is how going back to a
  * mark knows which came after it. */
-typedef struct chunk chunk;
 struct chunk {
     chunk* next;
     unsigned no;
@@ -141,6 +140,26 @@ static void free_all(chunk** chunks)
         *chunks = c->next;
         free(c);
     }
+}
+
+void* chunks_alloc(chunk** chunks, unsigned n)
+{
+    return alloc_in(chunks, n);
+}
+
+char* chunks_strndup(chunk** chunks, const char* s, unsigned n)
+{
+    char* p = alloc_in(chunks, n + 1);
+
+    memcpy(p, s, n);
+    p[n] = 0;
+
+    return p;
+}
+
+void chunks_free(chunk** chunks)
+{
+    free_all(chunks);
 }
 
 void* arena_alloc(unsigned n)
@@ -394,7 +413,7 @@ static int read_page(int pi)
 
                     return -1;
                 }
-                render_complete(topics[next].parent);
+                render_complete(TOPIC(next).parent);
                 cur = next;
             }
             if (cur >= 0) {

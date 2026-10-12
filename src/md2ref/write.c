@@ -212,24 +212,56 @@ unsigned words_get(uint8_t* p, unsigned n)
 
 /* --- patches: each link's placeholder, in the order of the text ---------------- */
 
+/* Its place in the text file, and the topic number to put there -- or what
+ * it waits for: a link's page to be read (PATCH_WAITING), or its own page
+ * (PATCH_MADE + the topic's number as made). Each is settled when that
+ * page is read, so all hold a number by the end, and the text is swept
+ * once and patched in order, as acc's sweep does. In blocks, as acc keeps
+ * them: never moved, so a table of them never needs room for two. */
 typedef struct {
     unsigned long at;
-    int link;
+    unsigned value;
 } patch;
 
-static patch* patches;
-static int npatches;
-static int max_patches;
+#define PATCH_BLOCK 256
+#define MAX_PATCH_BLOCKS 256
 
-void add_patch(unsigned long at, int link)
+static patch* patch_block[MAX_PATCH_BLOCKS];
+static unsigned npatches;
+
+#define PATCH(k) (patch_block[(k) >> 8][(uint8_t)(k)])
+
+unsigned add_patch(unsigned long at, unsigned value)
 {
-    if (npatches == max_patches) {
-        max_patches = max_patches ? max_patches * 2 : 64;
-        patches = md_realloc(patches, (unsigned)max_patches * (unsigned)sizeof(patch));
+    if (!patch_block[npatches >> 8]) {
+        if ((npatches >> 8) >= MAX_PATCH_BLOCKS) {
+            md_error("md2ref", 0, "too many links (at most %u)", PATCH_BLOCK * MAX_PATCH_BLOCKS);
+
+            return npatches;
+        }
+        patch_block[npatches >> 8] = md_realloc(NULL, PATCH_BLOCK * (unsigned)sizeof(patch));
     }
-    patches[npatches].at = at;
-    patches[npatches].link = link;
-    npatches++;
+    PATCH(npatches).at = at;
+    PATCH(npatches).value = value;
+
+    return npatches++;
+}
+
+void set_patch(unsigned k, unsigned value)
+{
+    if (k < npatches) {
+        PATCH(k).value = value;
+    }
+}
+
+unsigned patch_count(void)
+{
+    return npatches;
+}
+
+unsigned patch_value(unsigned k)
+{
+    return PATCH(k).value;
 }
 
 /* The text, from its file into the document, patched. Placeholders are
@@ -241,17 +273,16 @@ static void copy_text(void)
     unsigned long at = 0;
     unsigned n;
     int carry = -1;                 /* a placeholder's high byte, for the next window */
-    int p = 0;
+    unsigned p = 0;
 
     while ((n = get(&text_file, w, CHUNK)) > 0) {
         if (carry >= 0) {
             w[0] = (uint8_t)carry;
             carry = -1;
         }
-        for (; p < npatches && patches[p].at < at + n; p++) {
-            int link = patches[p].link;
-            unsigned t = link >= 0 ? pending_topic(link) : (unsigned)final_of[-2 - link];
-            unsigned k = (unsigned)(patches[p].at - at);
+        for (; p < npatches && PATCH(p).at < at + n; p++) {
+            unsigned t = PATCH(p).value <= 0xFFFF ? PATCH(p).value : NONE;
+            unsigned k = (unsigned)(PATCH(p).at - at);
 
             w[k] = (uint8_t)(t & 0xFF);
             if (k + 1 < n) {
@@ -308,7 +339,7 @@ static void make_titles(void)
     int t;
 
     for (t = 0; t < ntopics; t++) {
-        size += 1 + (unsigned)strlen(topics[t].title);
+        size += 1 + (unsigned)strlen(TOPIC(t).title);
     }
     pool = arena_alloc(size);
     title_at = arena_alloc((unsigned)ntopics * sizeof(unsigned));
@@ -317,7 +348,7 @@ static void make_titles(void)
     title_slot = md_realloc(NULL, title_slots * (unsigned)sizeof(unsigned));
     memset(title_slot, 0, title_slots * sizeof(unsigned));
     for (t = 0; t < ntopics; t++) {
-        title_at[t] = add_title(topics[t].title);
+        title_at[t] = add_title(TOPIC(t).title);
     }
     book_title_at = add_title(book_title);
     free(title_slot);
@@ -373,16 +404,16 @@ int write_book(const char* path)
     for (t = 0; t < ntopics; t++) {
         u32(title_at[t]);
         u16((unsigned)t);
-        u16(topics[t].first_child >= 0 ? (unsigned)topics[t].first_child : NONE);
-        u16(topics[t].next >= 0 ? (unsigned)topics[t].next : NONE);
+        u16(TOPIC(t).first_child >= 0 ? (unsigned)TOPIC(t).first_child : NONE);
+        u16(TOPIC(t).next >= 0 ? (unsigned)TOPIC(t).next : NONE);
     }
     for (t = 0; t < ntopics; t++) {
         u32(title_at[t]);
-        u32(topics[t].text_at);
-        u16(topics[t].packed);
-        u16(topics[t].len);
-        u16(topics[t].parent < 0 ? NONE : (unsigned)topics[t].parent);
-        u16((unsigned)topics[t].span);
+        u32(TOPIC(t).text_at);
+        u16(TOPIC(t).packed);
+        u16(TOPIC(t).len);
+        u16(TOPIC(t).parent < 0 ? NONE : (unsigned)TOPIC(t).parent);
+        u16((unsigned)TOPIC(t).span);
     }
     put(&doc, pool, pool_len);
     copy_text();
