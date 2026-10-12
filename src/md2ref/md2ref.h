@@ -9,8 +9,9 @@
  * written.
  *
  * One pass, in fixed memory, as aed, acc and zap work: each page is read
- * through a window that holds whole blocks, and each topic is rendered
- * and written out as soon as its last block is read. What
+ * through a window that holds whole blocks, each block is rendered into
+ * its topic as it is parsed, and each topic written out as soon as its
+ * last block is read. What
  * cannot be known yet is settled the way an assembler settles it:
  *
  * - a link to a topic not yet read is a placeholder, patched when the
@@ -135,6 +136,8 @@ void make_dir(const char* path);
 int page_open(int i);
 int page_next(line** lines, int* n);
 void page_close(void);
+/* Every page read: the window and the rest given back, for writing. */
+void pages_read(void);
 
 /* --- blocks ----------------------------------------------------------------------- */
 
@@ -266,11 +269,17 @@ int resolve_pending(void);
 /* --- markup ----------------------------------------------------------------------- */
 
 /* A topic read: blocks first..n-1 (from its heading, when it has one)
- * rendered, its words taken, compressed, and held; then, as each is
+ * rendered, its words taken, and held; then, as each is
  * complete -- every descendant read -- links to its children added if it
  * is too big to show with them, and written. render_complete(parent) as
  * the next topic begins; render_complete(-1) at a page's end. */
 void render_topic(int t, const block* b, int n);
+/* The same a block at a time, as each is parsed: a topic begun at its
+ * heading (NULL for a page's top, titled by its name), its other blocks
+ * added, ended as the next begins. */
+void render_begin(int t, const block* head);
+void render_block(const block* b);
+void render_end(void);
 void render_complete(int parent);
 /* A page's top topic, made late at first: the topics from it on move up
  * one, and it is held beneath those held, as their ancestor. */
@@ -293,6 +302,9 @@ extern unsigned max_packed;
 /* A topic's words, from its markup's plain text (and in_title, its title's):
  * between words_begin and words_end, for each topic, or more of one. */
 void words_begin(int t);
+/* Before anything else is allocated: the dictionary of words, taken whole
+ * at the bottom of the heap. */
+void words_init(void);
 /* The words of a topic's markup, n bytes of whole blocks. */
 void words_markup(const uint8_t* m, unsigned n);
 void words_text(const char* plain, int in_title);

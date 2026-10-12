@@ -71,7 +71,7 @@ _lz4_scan:
 	ld l, 0
 	ld h, 0
 	ex de, hl
-	ld hl, _lz4_head
+	ld hl, (_lz4_head)		; a pointer: made only when compressing
 	or a, a
 	sbc hl, de
 	ld (headadj), hl

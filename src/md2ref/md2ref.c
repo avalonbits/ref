@@ -197,14 +197,22 @@ void arena_back(arena_mark m)
     }
 }
 
-static char* copy_in(chunk** chunks, const char* s)
+/* The source's arena emptied for the next run: its newest chunk kept,
+ * to be used again from its start, rather than freed and made again for
+ * every run; any other freed. */
+static void source_reset(void)
 {
-    unsigned n = (unsigned)strlen(s);
-    char* p = alloc_in(chunks, n + 1);
+    chunk* keep = source_chunks;
 
-    memcpy(p, s, n + 1);
-
-    return p;
+    if (keep && keep->size == CHUNK) {
+        source_chunks = keep->next;
+        keep->next = NULL;
+        keep->used = 0;
+    } else {
+        keep = NULL;
+    }
+    free_all(&source_chunks);
+    source_chunks = keep;
 }
 
 void* source_alloc(unsigned n)
@@ -220,32 +228,6 @@ char* source_strndup(const char* s, unsigned n)
     p[n] = 0;
 
     return p;
-}
-
-/* Blocks still wanted, their strings copied to a fresh source arena and
- * the old one freed: the topics before them are done with. */
-static void keep_blocks(block* b, int n)
-{
-    chunk* fresh = NULL;
-    int k;
-    int j;
-
-    for (k = 0; k < n; k++) {
-        const char** ids = NULL;
-
-        if (b[k].nids) {
-            ids = alloc_in(&fresh, (unsigned)b[k].nids * (unsigned)sizeof(char*));
-            for (j = 0; j < b[k].nids; j++) {
-                ids[j] = copy_in(&fresh, b[k].ids[j]);
-            }
-        }
-        b[k].text = b[k].text ? copy_in(&fresh, b[k].text) : NULL;
-        b[k].marker = b[k].marker ? copy_in(&fresh, b[k].marker) : NULL;
-        b[k].id = b[k].id ? copy_in(&fresh, b[k].id) : NULL;
-        b[k].ids = ids;
-    }
-    free_all(&source_chunks);
-    source_chunks = fresh;
 }
 
 /* --- errors ------------------------------------------------------------------------ */
@@ -354,9 +336,10 @@ static int valid_name(const char* s)
     return n >= 1 && n <= 8;
 }
 
-/* A page, read once: each run of its lines parsed, and each topic, as the
- * next begins, rendered and written -- or held, until its descendants are
- * read. */
+/* A page, read once: each run of its lines parsed, and each block rendered
+ * into its topic as it comes -- the topic held, as the next begins, until
+ * its descendants are read. Then the run's blocks, and the source arena
+ * with them, are done with. */
 static int read_page(int pi)
 {
     page* p = &pages[pi];
@@ -364,8 +347,6 @@ static int read_page(int pi)
     int n;
     int got;
     int cur = -1;               /* the topic being read */
-    int first = 0;              /* its first block */
-    int seen = 0;               /* the blocks looked at */
     int any = 0;                /* a block yet on this page */
 
     if (page_open(pi) != 0) {
@@ -374,25 +355,26 @@ static int read_page(int pi)
     book_page(pi);
     parse_begin(p);
     while ((got = page_next(&L, &n)) == 1) {
-        int done_some = 0;
+        int k;
 
         parse_run(p, L, n);
-        for (; seen < p->nblocks; seen++) {
-            const block* b = &p->blocks[seen];
+        for (k = 0; k < p->nblocks; k++) {
+            const block* b = &p->blocks[k];
 
             if (!any) {
                 any = 1;
                 cur = book_top(pi, b);
+                if (cur >= 0) {
+                    render_begin(cur, NULL);
+                }
             }
             if (book_starts_topic(b)) {
                 int next;
 
                 if (cur >= 0) {
-                    render_topic(cur, p->blocks + first, seen - first);
+                    render_end();
                 }
-                first = seen;           /* moved down once a run, not at each topic */
-                done_some = 1;
-                next = book_heading(pi, &p->blocks[seen]);
+                next = book_heading(pi, b);
                 if (next < 0) {
                     page_close();
 
@@ -400,18 +382,16 @@ static int read_page(int pi)
                 }
                 render_complete(TOPIC(next).parent);
                 cur = next;
+                render_begin(cur, b);
+            } else if (cur >= 0) {
+                render_block(b);
             }
             if (cur >= 0) {
-                book_ids(pi, cur, &p->blocks[seen]);
+                book_ids(pi, cur, b);
             }
         }
-        if (done_some) {
-            memmove(p->blocks, p->blocks + first, (unsigned)(p->nblocks - first) * sizeof(block));
-            p->nblocks -= first;
-            seen -= first;
-            first = 0;
-            keep_blocks(p->blocks, p->nblocks);
-        }
+        p->nblocks = 0;
+        source_reset();
     }
     page_close();
     if (got < 0) {
@@ -419,12 +399,13 @@ static int read_page(int pi)
     }
     if (!any) {
         cur = book_top(pi, NULL);
+        if (cur >= 0) {
+            render_begin(cur, NULL);
+        }
     }
     if (cur >= 0) {
-        render_topic(cur, p->blocks, p->nblocks);
+        render_end();
     }
-    p->nblocks = 0;
-    free_all(&source_chunks);
     render_complete(-1);
     book_page_done(pi);
 
@@ -517,11 +498,13 @@ int main(int argc, char** argv)
      * arguments are checked to after the document is written. */
     begin = clock();
     cycles_start();
+    words_init();
     ok = read_pages(ninputs, inputs) == 0 && scratch_open(out) == 0;
     for (i = 0; ok && i < npages; i++) {
         STEP("pages");
         ok = read_page(i) == 0;
     }
+    pages_read();
     ok = ok && md_errors == 0 && book_done(title) == 0 && render_done() == 0
          && (number_topics(), 1)
          && resolve_pending() == 0 && STEP("index") && (make_keys(), 1)

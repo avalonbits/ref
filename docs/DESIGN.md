@@ -232,9 +232,10 @@ once, and writes each topic as soon as it can:
 whole lines, 8 KB to start and up to 32 KB for a long block. A run ends
 only where a block must: after a blank line, outside a code fence, before
 a line at the margin that is not a list item. Every container ends there,
-so the parser sees each run as it would the whole page. A topic's blocks,
-in a *source* arena, go when the next topic begins. What lasts goes in the
-*book's* arena: titles, headings, anchors.
+so the parser sees each run as it would the whole page. Each block is
+rendered into its topic as soon as it is parsed, and a run's blocks, in a
+*source* arena, go once it is rendered. What lasts goes in the *book's*
+arena: titles, headings, anchors.
 
 Three things are not known when a topic is read, and are settled the way
 an assembler settles a forward reference:
@@ -272,15 +273,20 @@ reads as it reads any, so the format is the same; the document is about
 a packed topic as big as the largest topic.
 
 All of agon-docs, 637 KB of Markdown and 721 topics, peaks at about
-260 KB on the Agon (`make agon-md2ref-heap` measures it). What grows with
-a document is its outline: its topics, their titles and anchors, and its
-keys.
+273 KB on the Agon (`make agon-md2ref-heap` measures it, and
+`test/md2ref.sh` holds it to a budget). What grows with a document is its
+outline: its topics, their titles and anchors, and its keys. The heap is
+333 KB, and agondev's allocator never gives back part of a block -- realloc
+makes a block bigger by copying it, and smaller not at all -- so what is
+big is taken once, early: the words' dictionary, a fixed 40 KB at the
+bottom of the heap, with its 16 KB table freed once the pages are read.
+Grown a piece at a time, as it was, it left no room for a large topic.
 
 It ends with "Done in N.NN seconds", worded as zap and acc word it, from
 MOS's clock. Under an emulator running flat out that clock means nothing,
 so `make agon-md2ref-cycles` builds one that has the emulator count its
 cycles instead (IO ports 0x40 and 0x41, fab-agon-emulator 2037657 on), as
-acc's bench does. All of agon-docs takes 750 million cycles: 41 seconds
+acc's bench does. All of agon-docs takes 708 million cycles: 38 seconds
 at the Agon's 18.432 MHz. That is a lower bound. The count is exact for
 the eZ80's own work, but the emulator charges nothing for reading the SD
 card, and md2ref reads its pages and three scratch files. The ports are

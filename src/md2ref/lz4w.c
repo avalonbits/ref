@@ -19,7 +19,7 @@
  * this one left off: an entry at or below it is from them, and is none.
  * So the table is cleared only when the positions would pass 16 bits,
  * not for every topic -- clearing 8 KB was a tenth of compressing. */
-uint16_t lz4_head[1 << HASH_BITS];
+uint16_t* lz4_head;          /* made when first compressing: only -z does */
 unsigned lz4_head_base;
 
 /* The hash of four bytes, a byte of it at a time from tables of random
@@ -221,9 +221,11 @@ unsigned lz4_compress(const uint8_t* src, unsigned n, uint8_t* dst, unsigned roo
     if (!mixed) {
         make_mix();
         mixed = 1;
+        lz4_head = md_realloc(NULL, (1u << HASH_BITS) * (unsigned)sizeof(uint16_t));
+        memset(lz4_head, 0, (1u << HASH_BITS) * sizeof(uint16_t));
     }
     if (lz4_head_base + n + 1 > 0xFFFF) {
-        memset(lz4_head, 0, sizeof lz4_head);
+        memset(lz4_head, 0, (1u << HASH_BITS) * sizeof(uint16_t));
         lz4_head_base = 0;
     }
     /* The text between placeholders, a stretch at a time: a match starts

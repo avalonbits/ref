@@ -116,6 +116,18 @@ void page_close(void)
     }
 }
 
+void pages_read(void)
+{
+    free(win);
+    free(run);
+    free(expanded);
+    free(look);
+    win = expanded = look = NULL;
+    run = NULL;
+    win_size = expanded_size = look_size = 0;
+    run_size = 0;
+}
+
 /* More of the file into the window, what is left moved to its start. 0, or
  * -1 if the window is full and as big as it may be. */
 static int fill(void)

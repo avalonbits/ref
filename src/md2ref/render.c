@@ -675,13 +675,16 @@ static int too_big(int t)
     return 0;
 }
 
-void render_topic(int t, const block* b, int n)
+/* The topic being rendered, begun at its heading (or, for a page's top,
+ * at its title), each block added as it is parsed, and ended as the next
+ * topic begins: so only a run's blocks are ever kept, not a topic's. */
+static int cur_topic = -1;
+
+void render_begin(int t, const block* head)
 {
     topic* tp = &TOPIC(t);
-    const page* p = &pages[tp->page];
-    held* h;
-    int k;
 
+    cur_topic = t;
     len = 0;
     nmarks = 0;
     ncell_links = 0;
@@ -689,10 +692,8 @@ void render_topic(int t, const block* b, int n)
     words_text(tp->title, 1);           /* first: a word's posting says it is in the title */
     block_head(B_HEAD, 1, 0, tp->level >= 1 ? (tp->level > 4 ? 4 : tp->level) : 1, 0);
     if (tp->heading) {
-        put_inline(p, b[0].no, b[0].text);
+        put_inline(&pages[tp->page], head->no, head->text);
         put(END);
-        b++;
-        n--;
     } else {
         const char* s = tp->title;
 
@@ -702,9 +703,23 @@ void render_topic(int t, const block* b, int n)
         put(END);
         words_of(0);
     }
-    for (k = 0; k < n; k++) {
-        one_block(p, &b[k]);
-    }
+}
+
+void render_block(const block* b)
+{
+    one_block(&pages[TOPIC(cur_topic).page], b);
+}
+
+/* The topic rendered, held -- its markup copied, as the buffer stays as
+ * big as the biggest topic has made it: grown afresh for each, it left
+ * the heap in pieces -- until its descendants are read. */
+void render_end(void)
+{
+    int t = cur_topic;
+    topic* tp = &TOPIC(t);
+    held* h;
+    int k;
+
     words_end();
     too_big(t);
 
@@ -734,6 +749,18 @@ void render_topic(int t, const block* b, int n)
         h->marks = md_realloc(NULL, (unsigned)nmarks * (unsigned)sizeof(mark));
         memcpy(h->marks, marks, (unsigned)nmarks * sizeof(mark));
     }
+    cur_topic = -1;
+}
+
+void render_topic(int t, const block* b, int n)
+{
+    int k;
+
+    render_begin(t, b);
+    for (k = TOPIC(t).heading ? 1 : 0; k < n; k++) {
+        render_block(&b[k]);
+    }
+    render_end();
 }
 
 /* Links to a topic's children, after its markup: for a topic too big to
@@ -783,7 +810,7 @@ static void complete(held* h)
     tp->span = h->total <= JOIN_LIMIT ? (int16_t)h->descendants : 0;
     len = h->len;
     if (tp->span == 0 && tp->nchildren) {
-        room_for(len + 1);
+        room_for(len + 1);              /* none is being rendered: the buffer is free */
         memcpy(buf, h->text, len);
         nmarks = 0;
         for (k = 0; k < h->nmarks; k++) {

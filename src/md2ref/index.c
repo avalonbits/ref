@@ -572,8 +572,9 @@ void make_keys(void)
  * dictionary is sorted, and the postings gathered a range of its words at
  * a time.
  *
- * The dictionary has at most DICT_BYTES. The words found once it is full
- * -- fewer, and rarer, as the common ones come early -- go as the word:
+ * The dictionary has DICT_BYTES, taken whole at the start. The words
+ * found once it is full -- fewer, and rarer, as the common ones come
+ * early -- go as the word:
  * its length, it, and the topic's number, each once a topic; and these
  * are sorted on the card, in runs that fit RUN bytes, merged a small
  * window per run, and woven in with the dictionary's as they are written.
@@ -600,52 +601,59 @@ static uint8_t topic_hi;
 #define FIRST_SLOTS 64
 
 /* The dictionary. */
-#define DICT_BYTES  (48 * 1024)     /* its entries, letters and table, at most */
-#define DICT_BLOCK  256
-#define DICT_MAX    8192            /* words: numbers fit 13 bits, and a table of 16 */
-#define DICT_TEXT   1024            /* a chunk of its letters */
+/* One region, taken whole before anything else (words_init), at the
+ * bottom of the heap: the words up from its start and their letters down
+ * from its end, full where they meet; and the table, a block of its own
+ * beside it, freed once the pages are read. Grown a block or a table at
+ * a time, as it was, its pieces all through the heap left no room big
+ * enough for a topic's markup. agondev's realloc never makes a block
+ * smaller, and makes one bigger by copying it. */
+#define DICT_BYTES  (40 * 1024)
+#define DSLOTS      8192            /* the table: a power of two */
+#define DICT_MAX    (DSLOTS * 3 / 4)    /* words: probing past that grows long */
+#define DICT_STOP   0xFFFF          /* last, for a stop word: never a topic + 1 */
 #define POSTING     0               /* a record that is a posting */
 
+/* A word: eight bytes on the Agon, so that the many a document has fit,
+ * and finding one by its number is a shift, not a multiply. Its number is
+ * the slot's that finds it. */
 typedef struct {
     uint8_t* s;             /* its letters */
-    uint16_t last;          /* the last topic, as made, + 1, while reading; then its rank */
+    uint16_t last;          /* the last topic, as made, + 1; DICT_STOP for a stop word,
+                               in the dictionary only to be found as one */
     uint16_t count;         /* its postings */
-    uint16_t id;            /* its number, and as bytes */
-    uint8_t id_lo;
-    uint8_t id_hi;
     uint8_t len;
-    uint8_t stop;           /* a stop word: in the dictionary only to be found as one */
 } dword;
 
-static dword* dict_block[DICT_MAX / DICT_BLOCK];
+static uint8_t* dregion;
+static dword* dict;                 /* the words, up from the region's start */
+static uint8_t* dtop;               /* their letters, down from the table */
 static unsigned ndict;
-static unsigned dict_bytes;
 static int dict_full;
-/* The words, by hash: probed by pointer, which is no multiply or shift
- * on the eZ80. A slot is four bytes there, and the hash's two bytes make
- * its offset byte by byte -- a subscript of three-byte pointers is a call
- * to multiply (zap's guide). */
-typedef union {
-    dword* p;
-    uint8_t pad[4];
+/* The words, by hash: each slot a word's number as two bytes -- its
+ * block, and its place in it -- or DSLOT_NONE; probed by pointer, which
+ * is no multiply or shift on the eZ80, and the hash's two bytes make its
+ * offset byte by byte. Two bytes, where a pointer was four: the table is
+ * the dictionary's biggest piece but its words' letters. */
+typedef struct {
+    uint8_t lo;
+    uint8_t hi;
 } dslot_t;
+
+#define DSLOT_NONE 0xFF             /* hi: no word; DICT_MAX keeps every number below */
 
 static dslot_t* dslot;
 static dslot_t* dslot_end;
 static uint8_t dslot_hmask;         /* the offset's high byte's mask, on the Agon */
-static unsigned ndslots;
-static uint8_t* dtext;              /* the chunk being filled, and what is left of it */
-static unsigned dtext_left;
-static uint8_t** dtext_chunks;      /* every chunk, to free */
-static unsigned ndtext_chunks;
-static unsigned dtext_chunks_cap;
 
-#define DW(k) (dict_block[(unsigned)(k) >> 8][(uint8_t)(k)])
+#define DW(k) (dict[k])
 
 /* Pearson's hash of the bytes of a word that tell words apart most -- its
- * length, its first two letters, its middle one and its last -- each two
+ * length, its first letter, its middle one and its last two -- each two
  * 8-bit lookups, not the whole word through md_hash: a word that shares
- * them all with another is told apart by the comparison after. */
+ * them all with another is told apart by the comparison after. Its last
+ * two, not its first two: names that share a start (vdp_, ffs_) are
+ * common, and with the first two they all fell together. */
 #define ALWAYS_INLINE static inline __attribute__((always_inline))
 #define COLD static __attribute__((noinline))  /* off word_seen's common path (zap's guide, 2a) */
 
@@ -654,13 +662,14 @@ ALWAYS_INLINE unsigned word_hash(const uint8_t* w, uint8_t len)
     const uint8_t* t = md_pearson;
     const uint8_t* mid = w + half_of[len];
     const uint8_t* last = w + len - 1;
+    const uint8_t* before = last - 1;   /* w itself for a word of two: the stop words */
     uint8_t a = t[len];                 /* bytes throughout: an int's and is a call */
     uint8_t b = t[(uint8_t)(len + 1)];
 
     a = t[a ^ w[0]];
     b = t[b ^ w[0]];
-    a = t[a ^ w[1]];
-    b = t[b ^ w[1]];
+    a = t[a ^ *before];
+    b = t[b ^ *before];
     a = t[a ^ *mid];
     b = t[b ^ *mid];
     a = t[a ^ *last];
@@ -697,6 +706,8 @@ static void more_slots(void)
     }
 }
 
+static unsigned long text_records;  /* words gone as words, in all */
+
 static void text_word(const char* word, int len, int topic, int in_title)
 {
     const uint8_t* key = (const uint8_t*)word;
@@ -725,10 +736,30 @@ static void text_word(const char* word, int len, int topic, int in_title)
     wbuf[at + 1 + len] = (uint8_t)(word_topic & 0xFF);
     wbuf[at + 2 + len] = (uint8_t)(word_topic >> 8 | (unsigned)in_title << 7);
     wlen += 1u + (unsigned)len + 2u;
+    text_records++;
     slot[h] = (uint16_t)(at + 1);
     if (++nwords * 2 > nslots) {
         more_slots();
     }
+}
+
+/* The word in slot sp. */
+ALWAYS_INLINE dword* slot_word(const dslot_t* sp)
+{
+#if defined(AGONDEV)
+    static volatile union {         /* as dict_find_h's offset: no shift */
+        unsigned v;
+        uint8_t b[3];
+    } k;
+
+    k.b[0] = sp->lo;
+    k.b[1] = sp->hi;
+    k.b[2] = 0;
+
+    return dict + k.v;
+#else
+    return dict + ((unsigned)sp->hi << 8 | sp->lo);
+#endif
 }
 
 /* The slot for w, of hash h: the one it is in, or the empty one it would
@@ -737,7 +768,6 @@ ALWAYS_INLINE dslot_t* dict_find_h(const uint8_t* w, uint8_t len, unsigned h)
 {
     dslot_t* sp;
     dslot_t* end = dslot_end;
-    dword* d;
 
 #if defined(AGONDEV)
     /* volatile, or the compiler joins the bytes back with a shift */
@@ -746,14 +776,19 @@ ALWAYS_INLINE dslot_t* dict_find_h(const uint8_t* w, uint8_t len, unsigned h)
         uint8_t b[3];
     } off;
 
-    off.b[0] = (uint8_t)h & 0xFC;
+    off.b[0] = (uint8_t)h & 0xFE;
     off.b[1] = (uint8_t)(h >> 8) & dslot_hmask;
     off.b[2] = 0;
     sp = (dslot_t*)((uint8_t*)dslot + off.v);
 #else
-    sp = dslot + (h & (ndslots - 1));
+    sp = dslot + ((h >> 1) & (DSLOTS - 1));
 #endif
-    while ((d = sp->p) != NULL && (d->len != len || memcmp(d->s, w, len) != 0)) {
+    while (sp->hi != DSLOT_NONE) {
+        const dword* d = slot_word(sp);
+
+        if (d->len == len && memcmp(d->s, w, len) == 0) {
+            break;
+        }
         if (++sp == end) {
             sp = dslot;
         }
@@ -767,68 +802,26 @@ static dslot_t* dict_find(const uint8_t* w, uint8_t len)
     return dict_find_h(w, len, word_hash(w, len));
 }
 
-/* The table twice as big, made again from the words: the old freed first,
- * so it never holds both. 0, or -1 if there is not the room for it. */
-COLD int dict_slots(void)
-{
-    unsigned want = ndslots ? ndslots * 2 : 512;
-    unsigned k;
-
-    if (dict_bytes + (want - ndslots) * (unsigned)sizeof(dslot_t) > DICT_BYTES || want > 0x10000) {
-        return -1;
-    }
-    dict_bytes += (want - ndslots) * (unsigned)sizeof(dslot_t);
-    free(dslot);
-    ndslots = want;
-    dslot_hmask = (uint8_t)((want * 4 >> 8) - 1);   /* 4-byte slots: at least 64 of them */
-    dslot = md_realloc(NULL, ndslots * (unsigned)sizeof(dslot_t));
-    dslot_end = dslot + ndslots;
-    memset(dslot, 0, ndslots * sizeof(dslot_t));
-    for (k = 0; k < ndict; k++) {
-        dict_find(DW(k).s, DW(k).len)->p = &DW(k);
-    }
-
-    return 0;
-}
-
 /* A new word into the dictionary, in the slot sp: it, or NULL if there is
  * no room for it. */
 COLD dword* dict_add(const uint8_t* w, unsigned len, dslot_t* sp)
 {
     unsigned k = ndict;
-    unsigned more = len + (k % DICT_BLOCK ? 0 : DICT_BLOCK * (unsigned)sizeof(dword))
-                    + (len > dtext_left ? DICT_TEXT : 0);
 
-    if (k == DICT_MAX || dict_bytes + more > DICT_BYTES) {
+    if (k == DICT_MAX || (uint8_t*)(dict + k + 1) + len > dtop) {
         return NULL;
     }
-    if (!dict_block[k / DICT_BLOCK]) {
-        dict_block[k / DICT_BLOCK] = md_realloc(NULL, DICT_BLOCK * (unsigned)sizeof(dword));
-    }
-    if (len > dtext_left) {
-        if (ndtext_chunks == dtext_chunks_cap) {
-            dtext_chunks_cap += 32;
-            dtext_chunks = md_realloc(dtext_chunks, dtext_chunks_cap * (unsigned)sizeof(uint8_t*));
-        }
-        dtext = dtext_chunks[ndtext_chunks++] = md_realloc(NULL, DICT_TEXT);
-        dtext_left = DICT_TEXT;
-    }
-    dict_bytes += more;
-    memcpy(dtext, w, len);
-    DW(k).s = dtext;
+    dtop -= len;
+    memcpy(dtop, w, len);
+    DW(k).s = dtop;
     DW(k).len = (uint8_t)len;
     DW(k).last = 0;
     DW(k).count = 0;
-    DW(k).id = (uint16_t)k;
-    DW(k).id_lo = (uint8_t)(k & 0xFF);
-    DW(k).id_hi = (uint8_t)(k >> 8);
-    DW(k).stop = 0;
-    dtext += len;
-    dtext_left -= len;
-    sp->p = &DW(k);
+    sp->lo = (uint8_t)k;
+    sp->hi = (uint8_t)(k >> 8);
     ndict++;
 
-    return sp->p;
+    return &DW(k);
 }
 
 /* The dictionary begun with the stop words, so that a word's one look in
@@ -837,9 +830,21 @@ COLD int dict_begin(void)
 {
     int k;
 
-    if (dict_slots() != 0) {
+    dregion = malloc(DICT_BYTES);       /* not md_realloc: without it, words go as words */
+    dslot = malloc(DSLOTS * sizeof(dslot_t));
+    if (!dregion || !dslot) {
+        free(dregion);
+        free(dslot);
+        dregion = NULL;
+        dslot = NULL;
+
         return -1;
     }
+    dslot_end = dslot + DSLOTS;
+    dslot_hmask = (uint8_t)((DSLOTS * sizeof(dslot_t) >> 8) - 1);
+    memset(dslot, DSLOT_NONE, DSLOTS * sizeof(dslot_t));
+    dict = (dword*)dregion;
+    dtop = dregion + DICT_BYTES;
     for (k = 0; k < NSTOP; k++) {
         const uint8_t* w = (const uint8_t*)STOP[k];
         uint8_t len = (uint8_t)strlen(STOP[k]);
@@ -852,7 +857,7 @@ COLD int dict_begin(void)
         if (!d) {
             return -1;
         }
-        d->stop = 1;
+        d->last = DICT_STOP;
     }
 
     return 0;
@@ -864,26 +869,15 @@ COLD int dict_begin(void)
 static void word_seen(const uint8_t* w, uint8_t len, int in_title)
 {
     unsigned h = word_hash(w, len);
+    dslot_t* sp = NULL;
     dword* d = NULL;
 
-    if (!dslot && !dict_full && dict_begin() != 0) {
-        dict_full = 1;
-    }
     if (dslot) {
-        dslot_t* sp = dict_find_h(w, len, h);
-
-        d = sp->p;
-        if (!d && !dict_full) {
-            if (ndict * 2 >= ndslots) {
-                if (dict_slots() != 0) {
-                    dict_full = 1;
-                } else {
-                    sp = dict_find_h(w, len, h);  /* the table is new */
-                }
-            }
-            if (!dict_full && (d = dict_add(w, len, sp)) == NULL) {
-                dict_full = 1;
-            }
+        sp = dict_find_h(w, len, h);
+        if (sp->hi != DSLOT_NONE) {
+            d = slot_word(sp);
+        } else if (!dict_full && (d = dict_add(w, len, sp)) == NULL) {
+            dict_full = 1;
         }
     }
     if (!d) {
@@ -893,7 +887,7 @@ static void word_seen(const uint8_t* w, uint8_t len, int in_title)
 
         return;
     }
-    if (d->stop) {
+    if (d->last == DICT_STOP) {
         return;
     }
     if (d->last != word_topic + 1) {
@@ -907,8 +901,8 @@ static void word_seen(const uint8_t* w, uint8_t len, int in_title)
         }
         r = wbuf + wlen;
         r[0] = POSTING;
-        r[1] = d->id_lo;                /* bytes as they go, made once: no shifts here */
-        r[2] = d->id_hi;
+        r[1] = sp->lo;                  /* its number, as bytes: no shifts here */
+        r[2] = sp->hi;
         r[3] = topic_lo;
         r[4] = in_title ? topic_hi | 0x80 : topic_hi;
         wlen += 5;
@@ -929,6 +923,16 @@ ALWAYS_INLINE int real_word(const uint8_t* w, unsigned len)
     }
 
     return kind == (NOT_DIGIT | REAL);
+}
+
+void words_init(void)
+{
+    if (!word_char['a']) {
+        make_tables();
+    }
+    if (dict_begin() != 0) {
+        dict_full = 1;
+    }
 }
 
 void words_begin(int t)
@@ -1713,22 +1717,20 @@ static int gather(void)
     }
 }
 
+/* The dictionary looked in no more: its table given back. */
+static void dict_shrink(void)
+{
+    free(dslot);
+    dslot = dslot_end = NULL;
+}
+
 static void free_dictionary(void)
 {
-    unsigned k;
-
-    for (k = 0; k < DICT_MAX / DICT_BLOCK; k++) {
-        free(dict_block[k]);
-        dict_block[k] = NULL;
-    }
-    for (k = 0; k < ndtext_chunks; k++) {
-        free(dtext_chunks[k]);
-    }
-    free(dtext_chunks);
-    free(dslot);
-    dtext_chunks = NULL;
-    dslot = NULL;
-    ndict = ndslots = ndtext_chunks = dtext_chunks_cap = dict_bytes = dtext_left = 0;
+    free(dregion);
+    dregion = NULL;
+    dict = NULL;
+    dslot = dslot_end = NULL;
+    ndict = 0;
 }
 
 int write_words(void (*emit)(const void* p, unsigned n))
@@ -1762,14 +1764,16 @@ int write_words(void (*emit)(const void* p, unsigned n))
     stage_to = emit;
     nstage = 0;
 
-    free(dslot);                        /* the dictionary is looked in no more */
-    dslot = NULL;
-    ndslots = 0;
+    dict_shrink();                      /* the dictionary is looked in no more */
 
-    /* The words found as words, into sorted runs, made ready to merge. */
-    run = md_realloc(NULL, RUN);
-    sorted = md_realloc(NULL, RUN);
-    nruns = make_runs(starts);
+    /* The words found as words, into sorted runs, made ready to merge --
+     * when the dictionary was full, and any were. */
+    nruns = 0;
+    if (text_records) {
+        run = md_realloc(NULL, RUN);
+        sorted = md_realloc(NULL, RUN);
+        nruns = make_runs(starts);
+    }
     free(sorted);
     free(run);
     run = sorted = NULL;

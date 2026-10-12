@@ -613,13 +613,22 @@ class Md2ref(unittest.TestCase):
         # once it is full are kept as words, sorted on the card, and woven in
         # among the dictionary's as the words are written -- in order, so a
         # search finds the first, a middle and the last.
-        page = '# Many\n\n' + ''.join('## T%d\n\n%s\n\n' % (k, ' '.join(
+        # The word of 24 letters first moves where the dictionary fills to
+        # a word that only just fits, on the PC: its letters end where the
+        # last word's entry does.
+        page = '# Many\n\n' + 'y' * 23 + 'q\n\n' + ''.join('## T%d\n\n%s\n\n' % (k, ' '.join(
             'z%sq' % name for name in ['%05d' % (k * 100 + j) for j in range(100)])) for k in range(60))
         p, data, left = compile_pages({'index.md': page})
         self.assertEqual(p.returncode, 0, p.stdout)
-        self.assertIn('words %d\n' % (6000 + 1 + 50 + 1), ask(data, 'info'))  # many, t10-t59, section
+        self.assertIn('words %d\n' % (6000 + 1 + 50 + 1 + 1), ask(data, 'info'))  # many, t10-t59, section, y
         got = ask(data, 'search', ['z00000q', 'z03017q', 'z05999q']).splitlines()
         self.assertEqual([g.split()[1].split(':')[0] for g in got], ['1', '31', '60'])
+        # And every one, each in its topic: those that filled the dictionary
+        # to where its words and their letters meet too.
+        words = ['z%05dq' % n for n in range(6000)]
+        got = ask(data, 'search', words).splitlines()
+        self.assertEqual([g.split()[1].split(':')[0] for g in got],
+                         [str(1 + n // 100) for n in range(6000)])
 
     def test_postings_past_one_gather(self):
         # More postings than one pass gathers: the same 90 words in 400
