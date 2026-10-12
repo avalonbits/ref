@@ -15,43 +15,51 @@
 #define HASH_BITS 12
 #define MIN_MATCH 4
 
-/* Positions + 1, each above head_base, which is where the calls before
+/* Positions + 1, each above lz4_head_base, which is where the calls before
  * this one left off: an entry at or below it is from them, and is none.
  * So the table is cleared only when the positions would pass 16 bits,
  * not for every topic -- clearing 8 KB was a tenth of compressing. */
-static uint16_t head[1 << HASH_BITS];
-static unsigned head_base;
+uint16_t lz4_head[1 << HASH_BITS];
+unsigned lz4_head_base;
 
-/* The hash of four bytes, from a table of random bytes for each byte and
- * each half of the result: 8-bit lookups and exclusive ors, which the eZ80
- * does in line, where the multiply and the 32-bit shifts of the usual
- * hash are calls -- and this runs at every byte of every topic. */
-static uint8_t mix_lo[4][256];
-static uint8_t mix_hi[4][256];
+/* The hash of four bytes, a byte of it at a time from tables of random
+ * bytes: each half (8 bits, and 5) is rotated a bit and the next byte's
+ * entry exclusive-ored in. So the next position's is this one's rotated,
+ * with the byte leaving taken out -- its entry rotated four, from a table
+ * of those -- and the byte coming in put in: what the Agon's scan does,
+ * rolling, in two lookups where hashing afresh is eight. Pages: T and U
+ * the halves' tables, R and V theirs rotated four. Aligned, so that the
+ * Agon's scan finds an entry by setting a register's low byte. */
+uint8_t lz4_tab[4][256] __attribute__((aligned(1024)));   /* in one 64 KB page */
+#define T_PAGE 0
+#define R_PAGE 1
+#define U_PAGE 2
+#define V_PAGE 3
 static int mixed;
+
+static uint8_t rol(uint8_t x)
+{
+    return (uint8_t)(x << 1 | x >> 7);
+}
 
 static void make_mix(void)
 {
     uint32_t v = 1;
-    unsigned k;
     unsigned b;
 
-    for (k = 0; k < 4; k++) {
-        for (b = 0; b < 256; b++) {
-            v = v * 1103515245UL + 12345;
-            mix_lo[k][b] = (uint8_t)(v >> 16);
-            v = v * 1103515245UL + 12345;
-            mix_hi[k][b] = (uint8_t)(v >> 16 & ((1 << (HASH_BITS - 8)) - 1));
-        }
+    for (b = 0; b < 256; b++) {
+        uint8_t t;
+        uint8_t u;
+
+        v = v * 1103515245UL + 12345;
+        t = (uint8_t)(v >> 16);
+        v = v * 1103515245UL + 12345;
+        u = (uint8_t)(v >> 16);
+        lz4_tab[T_PAGE][b] = t;
+        lz4_tab[U_PAGE][b] = u;
+        lz4_tab[R_PAGE][b] = rol(rol(rol(rol(t))));
+        lz4_tab[V_PAGE][b] = rol(rol(rol(rol(u))));
     }
-}
-
-static unsigned hash(const uint8_t* p)
-{
-    uint8_t lo = mix_lo[0][p[0]] ^ mix_lo[1][p[1]] ^ mix_lo[2][p[2]] ^ mix_lo[3][p[3]];
-    uint8_t hi = mix_hi[0][p[0]] ^ mix_hi[1][p[1]] ^ mix_hi[2][p[2]] ^ mix_hi[3][p[3]];
-
-    return (unsigned)hi << 8 | lo;
 }
 
 static unsigned length_bytes(uint8_t* o, unsigned n)
@@ -125,6 +133,69 @@ static unsigned clear_of(const unsigned* fixed, int n, unsigned p, unsigned mlen
     return mlen;
 }
 
+#if defined(AGONDEV)
+/* lz4scan.s: scan, by hand. */
+unsigned lz4_scan(const uint8_t* src, unsigned n, unsigned* pi, unsigned* pcand);
+#define SCAN lz4_scan
+#else
+#define SCAN scan
+
+/* The entry of head for the four bytes at p: the low half's top seven
+ * bits and the high half's low five. */
+static unsigned hash(const uint8_t* p)
+{
+    uint8_t lo = lz4_tab[T_PAGE][p[0]];
+    uint8_t hi = lz4_tab[U_PAGE][p[0]];
+    int k;
+
+    for (k = 1; k < 4; k++) {
+        lo = rol(lo) ^ lz4_tab[T_PAGE][p[k]];
+        hi = rol(hi) ^ lz4_tab[U_PAGE][p[k]];
+    }
+
+    return (unsigned)(hi & 0x1F) << 7 | lo >> 1;
+}
+
+/* From *pi on, each position's hash into head, until one whose latest
+ * earlier position of the same hash starts a match of MIN_MATCH bytes or
+ * more: its length, with the position in *pi and the match's start + 1 in
+ * *pcand. 0 when there is none before the last four bytes. This is where
+ * compressing spends its time: almost every byte goes through here, and
+ * only a match leaves it. */
+static unsigned scan(const uint8_t* src, unsigned n, unsigned* pi, unsigned* pcand)
+{
+    unsigned i = *pi;
+
+    while (i + MIN_MATCH <= n) {
+        unsigned h = hash(src + i);
+        unsigned e = lz4_head[h];
+
+        lz4_head[h] = (uint16_t)(lz4_head_base + i + 1);
+        if (e > lz4_head_base) {
+            const uint8_t* a = src + (e - lz4_head_base - 1);
+            const uint8_t* b = src + i;
+            unsigned mlen = 0;
+
+            while (i + mlen < n && a[mlen] == b[mlen]) {
+                mlen++;
+            }
+            if (mlen >= MIN_MATCH) {
+                *pi = i;
+                *pcand = e - lz4_head_base;
+
+                return mlen;
+            }
+        }
+        i++;
+    }
+    *pi = i;
+
+    return 0;
+}
+#endif
+
+/* n is at most 65535 -- a topic's most -- so with lz4_head_base cleared to 0
+ * when it must be, every position + 1 fits in head's 16 bits. */
 unsigned lz4_compress(const uint8_t* src, unsigned n, uint8_t* dst, unsigned room,
                       const unsigned* fixed, int nfixed, unsigned* fixed_at)
 {
@@ -139,33 +210,25 @@ unsigned lz4_compress(const uint8_t* src, unsigned n, uint8_t* dst, unsigned roo
         make_mix();
         mixed = 1;
     }
-    if (head_base + n + 1 > 0xFFFF) {
-        memset(head, 0, sizeof head);
-        head_base = 0;
+    if (lz4_head_base + n + 1 > 0xFFFF) {
+        memset(lz4_head, 0, sizeof lz4_head);
+        lz4_head_base = 0;
     }
-    while (i + MIN_MATCH <= n) {
-        unsigned h = hash(src + i);
-        unsigned e = head[h];
-        unsigned cand = e > head_base ? e - head_base : 0;
-        unsigned mlen = 0;
+    for (;;) {
+        unsigned cand;
+        unsigned mlen = i + MIN_MATCH <= n ? SCAN(src, n, &i, &cand) : 0;
+        const uint8_t* b = src + i;
 
-        head[h] = (uint16_t)(head_base + i + 1 > 0xFFFF ? 0 : head_base + i + 1);
-        if (cand && i - (cand - 1) <= 0xFFFF && i + 1 <= 0xFFFF) {
-            const uint8_t* a = src + cand - 1;
-            const uint8_t* b = src + i;
-
-            while (i + mlen < n && a[mlen] == b[mlen]) {
-                mlen++;
-            }
-            /* A placeholder is the two bytes after a LINK, and both sides
-             * of a match are the same bytes: only a match with a LINK in
-             * it, or that starts on what could be a placeholder's second
-             * byte, can take one in. Most have neither, and need no
-             * search. */
-            if (nfixed && mlen >= MIN_MATCH && (b[0] == 0xFF || memchr(b, REF_LINK, mlen))) {
-                mlen = clear_of(fixed, nfixed, i, mlen);
-                mlen = clear_of(fixed, nfixed, cand - 1, mlen);
-            }
+        if (!mlen) {
+            break;
+        }
+        /* A placeholder is the two bytes after a LINK, and both sides of a
+         * match are the same bytes: only a match with a LINK in it, or
+         * that starts on what could be a placeholder's second byte, can
+         * take one in. Most have neither, and need no search. */
+        if (nfixed && (b[0] == 0xFF || memchr(b, REF_LINK, mlen))) {
+            mlen = clear_of(fixed, nfixed, i, mlen);
+            mlen = clear_of(fixed, nfixed, cand - 1, mlen);
         }
         if (mlen >= MIN_MATCH) {
             unsigned start = o;
@@ -189,7 +252,7 @@ unsigned lz4_compress(const uint8_t* src, unsigned n, uint8_t* dst, unsigned roo
             fixed_at[f] = start + at + fixed[f] - lit;
         }
     }
-    head_base += n + 1;
+    lz4_head_base += n + 1;
 
     return o;
 }

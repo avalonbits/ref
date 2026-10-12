@@ -35,7 +35,8 @@ AGONDEV ?= $(HOME)/agondev
 # other program's sources. Expanded by the sub-make, with its OBJDIR.
 REF_OBJS = OBJS='$$(patsubst src/%.c,$$(OBJDIR)/%.o,$$(wildcard src/core/*.c src/viewer/*.c))'
 MD2REF_OBJS = OBJS='$$(patsubst src/%.c,$$(OBJDIR)/%.o,$$(wildcard src/md2ref/*.c) \
-	src/core/normalize.c src/core/lz4.c $$(if $$(ZMALLOC),src/viewer/zmalloc.c))'
+	src/core/normalize.c src/core/lz4.c $$(if $$(ZMALLOC),src/viewer/zmalloc.c)) \
+	$$(patsubst src/%.s,$$(OBJDIR)/%.o,$$(wildcard src/md2ref/*.s))'
 
 AGON_MAKE = PATH=$(AGONDEV)/bin:$$PATH $(MAKE) -f agon.mk $(REF_OBJS)
 MD2REF_MAKE = PATH=$(AGONDEV)/bin:$$PATH $(MAKE) -f md2ref.mk $(MD2REF_OBJS)

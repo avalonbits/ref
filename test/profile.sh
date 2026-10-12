@@ -79,6 +79,8 @@ import bisect
 by = {}
 at = {}
 for l in open(prof):
+    if len(l.split()) != 2:
+        continue                # a line the emulator was stopped writing
     a, c = l.split()
     a, c = int(a, 16), int(c)
     at[a] = c
