@@ -15,7 +15,12 @@
 #define HASH_BITS 12
 #define MIN_MATCH 4
 
-static uint16_t head[1 << HASH_BITS];      /* positions + 1; 0 for none */
+/* Positions + 1, each above head_base, which is where the calls before
+ * this one left off: an entry at or below it is from them, and is none.
+ * So the table is cleared only when the positions would pass 16 bits,
+ * not for every topic -- clearing 8 KB was a tenth of compressing. */
+static uint16_t head[1 << HASH_BITS];
+static unsigned head_base;
 
 /* The hash of four bytes, from a table of random bytes for each byte and
  * each half of the result: 8-bit lookups and exclusive ors, which the eZ80
@@ -134,13 +139,17 @@ unsigned lz4_compress(const uint8_t* src, unsigned n, uint8_t* dst, unsigned roo
         make_mix();
         mixed = 1;
     }
-    memset(head, 0, sizeof head);
+    if (head_base + n + 1 > 0xFFFF) {
+        memset(head, 0, sizeof head);
+        head_base = 0;
+    }
     while (i + MIN_MATCH <= n) {
         unsigned h = hash(src + i);
-        unsigned cand = head[h];
+        unsigned e = head[h];
+        unsigned cand = e > head_base ? e - head_base : 0;
         unsigned mlen = 0;
 
-        head[h] = (uint16_t)(i + 1 > 0xFFFF ? 0 : i + 1);
+        head[h] = (uint16_t)(head_base + i + 1 > 0xFFFF ? 0 : head_base + i + 1);
         if (cand && i - (cand - 1) <= 0xFFFF && i + 1 <= 0xFFFF) {
             const uint8_t* a = src + cand - 1;
             const uint8_t* b = src + i;
@@ -180,6 +189,7 @@ unsigned lz4_compress(const uint8_t* src, unsigned n, uint8_t* dst, unsigned roo
             fixed_at[f] = start + at + fixed[f] - lit;
         }
     }
+    head_base += n + 1;
 
     return o;
 }

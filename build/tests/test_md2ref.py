@@ -408,6 +408,17 @@ class Md2ref(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stdout)
         self.assertIn(b'if x:\n    y = 1\n', b''.join(views(data)))
 
+    def test_text_is_compressed_past_64_kb(self):
+        # The compressor's table of positions is shared by every topic, and
+        # cleared only when they would pass 16 bits: 120 KB of topics, and
+        # those after the first 64 KB compress like the rest.
+        page = '# Doc\n\n' + ''.join('## Part %d\n\n%s' % (k, filler('part%d' % k, 20))
+                                   for k in range(75))
+        p, data, left = compile_pages({'index.md': page})
+        self.assertEqual(p.returncode, 0, p.stdout)
+        self.assertGreater(len(page), 120000)
+        self.assertLess(len(data), len(page) // 3)
+
     def test_words_past_one_run(self):
         # More words than one 16 KB run of the words file holds: sorted in
         # runs, merged, every word still finds its topic.
