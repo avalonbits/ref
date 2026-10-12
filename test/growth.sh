@@ -22,17 +22,21 @@ fi
 python3 "$ROOT/test/stress.py" "$SCRATCH/a" "$SMALL"
 python3 "$ROOT/test/stress.py" "$SCRATCH/b" "$(python3 -c "print($SMALL * 2)")"
 
+# The cases made to load the search's index, with every word in it (-f):
+# without, only names are, and these would say nothing of it.
+declare -A FLAGS=([common]=-f [prefix]=-f)
+
 refs() {
     valgrind --tool=cachegrind --cache-sim=no --cachegrind-out-file=/dev/null \
-        "$MD2REF" -w -o "$SCRATCH/out.dat" "$1" 2>&1 >/dev/null \
+        "$MD2REF" -w ${FLAGS[$2]:-} -o "$SCRATCH/out.dat" "$1" 2>&1 >/dev/null \
         | sed -n 's/.*I *refs: *\([0-9,]*\).*/\1/p' | tr -d ,
 }
 
 status=0
 for d in "$SCRATCH"/a/*/; do
     c=$(basename "$d")
-    a=$(refs "$SCRATCH/a/$c")
-    b=$(refs "$SCRATCH/b/$c")
+    a=$(refs "$SCRATCH/a/$c" "$c")
+    b=$(refs "$SCRATCH/b/$c" "$c")
     ba=$(cat "$SCRATCH/a/$c"/*.md | wc -c)
     bb=$(cat "$SCRATCH/b/$c"/*.md | wc -c)
     # Per byte, as the second input is about, not exactly, twice the first.

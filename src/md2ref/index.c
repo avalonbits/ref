@@ -608,9 +608,14 @@ static uint8_t topic_hi;
  * a time, as it was, its pieces all through the heap left no room big
  * enough for a topic's markup. agondev's realloc never makes a block
  * smaller, and makes one bigger by copying it. */
-#define DICT_BYTES  (40 * 1024)
+#define DICT_BYTES  (40 * 1024)     /* with -f, every word: about 2600 words */
 #define DSLOTS      8192            /* the table: a power of two */
-#define DICT_MAX    (DSLOTS * 3 / 4)    /* words: probing past that grows long */
+#define NAME_BYTES  (24 * 1024)     /* names only: agon-docs has about 1300 */
+#define NAME_SLOTS  4096
+
+static unsigned dict_bytes;         /* the region, and the table, as words_init sized them */
+static unsigned dslots;
+static unsigned dict_max;           /* words: past three quarters full, probing grows long */
 #define DICT_STOP   0xFFFF          /* last, for a stop word: never a topic + 1 */
 #define POSTING     0               /* a record that is a posting */
 
@@ -640,7 +645,7 @@ typedef struct {
     uint8_t hi;
 } dslot_t;
 
-#define DSLOT_NONE 0xFF             /* hi: no word; DICT_MAX keeps every number below */
+#define DSLOT_NONE 0xFF             /* hi: no word; dict_max keeps every number below */
 
 static dslot_t* dslot;
 static dslot_t* dslot_end;
@@ -781,7 +786,7 @@ ALWAYS_INLINE dslot_t* dict_find_h(const uint8_t* w, uint8_t len, unsigned h)
     off.b[2] = 0;
     sp = (dslot_t*)((uint8_t*)dslot + off.v);
 #else
-    sp = dslot + ((h >> 1) & (DSLOTS - 1));
+    sp = dslot + ((h >> 1) & (dslots - 1));
 #endif
     while (sp->hi != DSLOT_NONE) {
         const dword* d = slot_word(sp);
@@ -808,7 +813,7 @@ COLD dword* dict_add(const uint8_t* w, unsigned len, dslot_t* sp)
 {
     unsigned k = ndict;
 
-    if (k == DICT_MAX || (uint8_t*)(dict + k + 1) + len > dtop) {
+    if (k == dict_max || (uint8_t*)(dict + k + 1) + len > dtop) {
         return NULL;
     }
     dtop -= len;
@@ -830,8 +835,8 @@ COLD int dict_begin(void)
 {
     int k;
 
-    dregion = malloc(DICT_BYTES);       /* not md_realloc: without it, words go as words */
-    dslot = malloc(DSLOTS * sizeof(dslot_t));
+    dregion = malloc(dict_bytes);       /* not md_realloc: without it, words go as words */
+    dslot = malloc(dslots * sizeof(dslot_t));
     if (!dregion || !dslot) {
         free(dregion);
         free(dslot);
@@ -840,11 +845,11 @@ COLD int dict_begin(void)
 
         return -1;
     }
-    dslot_end = dslot + DSLOTS;
-    dslot_hmask = (uint8_t)((DSLOTS * sizeof(dslot_t) >> 8) - 1);
-    memset(dslot, DSLOT_NONE, DSLOTS * sizeof(dslot_t));
+    dslot_end = dslot + dslots;
+    dslot_hmask = (uint8_t)((dslots * sizeof(dslot_t) >> 8) - 1);
+    memset(dslot, DSLOT_NONE, dslots * sizeof(dslot_t));
     dict = (dword*)dregion;
-    dtop = dregion + DICT_BYTES;
+    dtop = dregion + dict_bytes;
     for (k = 0; k < NSTOP; k++) {
         const uint8_t* w = (const uint8_t*)STOP[k];
         uint8_t len = (uint8_t)strlen(STOP[k]);
@@ -930,6 +935,9 @@ void words_init(void)
     if (!word_char['a']) {
         make_tables();
     }
+    dict_bytes = md_full_text ? DICT_BYTES : NAME_BYTES;
+    dslots = md_full_text ? DSLOTS : NAME_SLOTS;
+    dict_max = dslots / 4 * 3;
     if (dict_begin() != 0) {
         dict_full = 1;
     }
@@ -1036,6 +1044,54 @@ void words_span(const uint8_t* s, const uint8_t* e)
     len = (unsigned)(o - w);
     if (len >= 3 && real_word(w, len)) {
         word_seen(w, (uint8_t)len, 0);
+    }
+}
+
+/* The names in a topic's markup, as inline.c takes them without -f: the
+ * words inside a code span, a link's label or an emphasis, each word cut
+ * where the span ends. */
+void words_markup_names(const uint8_t* m, unsigned n)
+{
+    const uint8_t* s = m;
+    const uint8_t* e = m + n;
+
+    if (!word_char['a']) {
+        make_tables();
+    }
+    while (s < e) {
+        const uint8_t* start = NULL;
+        unsigned depth = 0;
+
+        s += 3;                             /* the block's head */
+        while (s < e && *s != REF_END) {
+            uint8_t b = *s;
+
+            if (b == REF_EM_ON || b == REF_CODE_ON || b == REF_LINK) {
+                depth++;
+                s += b == REF_LINK ? 3 : 1;
+            } else if (b == REF_EM_OFF || b == REF_CODE_OFF || b == REF_LINK_END) {
+                if (depth && !--depth && start) {
+                    words_span(start, s);
+                    start = NULL;
+                }
+                s++;
+            } else if (depth && word_char[b]) {
+                if (!start) {
+                    start = s;
+                }
+                s++;
+            } else {
+                if (start && (b >= 0x20 || b == REF_BREAK || b == '\n')) {
+                    words_span(start, s);
+                    start = NULL;
+                }
+                s++;
+            }
+        }
+        if (start) {
+            words_span(start, s);
+        }
+        s++;                                /* the END */
     }
 }
 

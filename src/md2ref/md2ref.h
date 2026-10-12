@@ -1,8 +1,8 @@
 /*
  * md2ref: Markdown pages compiled into a ref document (docs/FORMAT.md).
  *
- *   md2ref [-t <title>] [-w] [-z] [-e <file>] <name> [<dir> | <page.md>... | @list]
- *   md2ref [-t <title>] [-w] [-z] [-e <file>] -o <file.dat> <dir> | <page.md>... | @list
+ *   md2ref [-t <title>] [-w] [-z] [-f] [-e <file>] <name> [<dir> | <page.md>... | @list]
+ *   md2ref [-t <title>] [-w] [-z] [-f] [-e <file>] -o <file.dat> <dir> | <page.md>... | @list
  *
  * Portable C, like the reader core: it builds for the PC, and for the Agon
  * with agondev, so a program's documentation can be compiled where it is
@@ -88,6 +88,7 @@ void md_warn(const char* file, int line, const char* fmt, ...);
 extern int md_errors;
 extern int md_keep_going;   /* -w: an unresolved link is a warning */
 extern int md_compress;     /* -z: each topic's text compressed, not stored */
+extern int md_full_text;    /* -f: every word in the search's index, not names only */
 
 /* --- the pages ------------------------------------------------------------------ */
 
@@ -188,13 +189,19 @@ int split_row(const char* s, int len, const char** cells, int* lens, int max);
 typedef int (*link_fn)(const page* p, int no, const char* href, int len);
 
 /* Inline Markdown into markup bytes appended at out (size left in room):
- * how many were written. With words, each word of it is taken as it is
- * written, words_take or words_span, between words_begin and words_end. */
+ * how many were written. Its words are taken as they are written
+ * (words_take or words_span, between words_begin and words_end): none,
+ * every one, or only the names -- those inside a code span, a link's
+ * label or an emphasis, each cut where the span ends. */
+#define WORDS_NONE  0
+#define WORDS_ALL   1
+#define WORDS_NAMES 2
 int inline_markup(const page* p, int no, const char* s, uint8_t* out, int room, link_fn links,
                   int words);
 /* A code block's text into markup at out, ending in a newline, its words
- * taken as inline_markup takes them: how many bytes. */
-int code_markup(const char* s, uint8_t* out, int room);
+ * taken as inline_markup takes them (WORDS_NONE or WORDS_ALL): how many
+ * bytes. */
+int code_markup(const char* s, uint8_t* out, int room, int words);
 /* The plain text of inline Markdown, as a reader sees it, into out. */
 void inline_plain(const char* s, char* out, int size);
 /* The code spans of inline Markdown, in turn: the next from *at into out,
@@ -307,6 +314,9 @@ void words_begin(int t);
 void words_init(void);
 /* The words of a topic's markup, n bytes of whole blocks. */
 void words_markup(const uint8_t* m, unsigned n);
+/* Only the names in it: the words inside a code span, a link's label or
+ * an emphasis, as inline_markup takes them with WORDS_NAMES. */
+void words_markup_names(const uint8_t* m, unsigned n);
 void words_text(const char* plain, int in_title);
 /* A word of markup as it is written (inline.c): len bytes as they are
  * (lower case, nothing inside), or from s to e with a capital or a code

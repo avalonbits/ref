@@ -121,7 +121,7 @@ static void block_head(int kind, int space, int note, int a, int b)
 /* Inline Markdown's markup is never longer than its text and a little: a
  * link's target is three bytes for at least four of Markdown. Room for
  * twice that. */
-static void put_inline(const page* p, int no, const char* s)
+static void put_inline(const page* p, int no, const char* s, int words)
 {
     unsigned at = len < TOPIC_MAX ? len : TOPIC_MAX;
     unsigned want = at + 2 * (unsigned)strlen(s) + 16;
@@ -129,7 +129,7 @@ static void put_inline(const page* p, int no, const char* s)
 
     room_for(want < TOPIC_MAX + 1 ? want : TOPIC_MAX + 1);
     inline_at = at;
-    n = inline_markup(p, no, s, buf + at, (int)(cap - at), resolve_link, 1);
+    n = inline_markup(p, no, s, buf + at, (int)(cap - at), resolve_link, words);
     if (n > (int)(cap - at)) {
         n = (int)(cap - at);                /* only past TOPIC_MAX: too big, said below */
         len = TOPIC_MAX + 1;
@@ -172,7 +172,7 @@ static cell styled_cell(const page* p, int no, const char* s, int slen)
 
     in_cell = 1;
     ncell = 0;
-    n = inline_markup(p, no, text, m, CELL_MAX, resolve_link, 0);
+    n = inline_markup(p, no, text, m, CELL_MAX, resolve_link, WORDS_NONE);
     in_cell = 0;
     if (n > CELL_MAX) {
         n = CELL_MAX;
@@ -528,12 +528,25 @@ static void table(const page* p, const block* b)
     }
 }
 
-/* The words of the blocks rendered from start, read from their markup:
- * for those whose words are not taken as they are written. */
-static void words_of(unsigned start)
+/* What a block's words are, as it is written: every one, with -f; else
+ * all of a heading's, and of a block emphasised whole (a note's title),
+ * and only the names of the rest. */
+static int words_for(const block* b)
+{
+    return md_full_text || b->kind == B_HEAD || b->em ? WORDS_ALL : WORDS_NAMES;
+}
+
+/* The words of the blocks rendered from start, read from their markup --
+ * all, or only the names -- for those whose words are not taken as they
+ * are written. */
+static void words_of(unsigned start, int words)
 {
     if (len <= TOPIC_MAX) {
-        words_markup(buf + start, len - start);
+        if (words == WORDS_ALL) {
+            words_markup(buf + start, len - start);
+        } else {
+            words_markup_names(buf + start, len - start);
+        }
     }
 }
 
@@ -548,7 +561,7 @@ static void code(const char* s)
     int n;
 
     room_for(want < TOPIC_MAX + 1 ? want : TOPIC_MAX + 1);
-    n = code_markup(s, buf + at, (int)(cap - at));
+    n = code_markup(s, buf + at, (int)(cap - at), md_full_text ? WORDS_ALL : WORDS_NONE);
     if (n > (int)(cap - at)) {
         n = (int)(cap - at);                /* only past TOPIC_MAX: too big, said below */
         len = TOPIC_MAX + 1;
@@ -567,14 +580,14 @@ static void one_block(const page* p, const block* b)
         if (b->em) {
             put(EM_ON);
         }
-        put_inline(p, b->no, b->text);
+        put_inline(p, b->no, b->text, words_for(b));
         if (b->em) {
             put(EM_OFF);
         }
         break;
     case B_HEAD:
         block_head(B_HEAD, b->space, b->note, b->level, 0);
-        put_inline(p, b->no, b->text);
+        put_inline(p, b->no, b->text, WORDS_ALL);
         break;
     case B_PRE:
         block_head(B_PRE, b->space, b->note, b->indent, 0);
@@ -586,7 +599,7 @@ static void one_block(const page* p, const block* b)
         block_head(B_PRE, b->space, b->note, b->indent, 1);
         table(p, b);
         put(END);
-        words_of(start);                    /* laid out, its words are read from it */
+        words_of(start, md_full_text ? WORDS_ALL : WORDS_NAMES);  /* read from it, laid out */
 
         return;
     }
@@ -657,7 +670,11 @@ static void take_words(int t, unsigned start, const char* title)
     if (title) {
         words_text(title, 1);           /* first: a word's posting says it is in the title */
     }
-    words_markup(buf + start, len - start);
+    if (md_full_text) {
+        words_markup(buf + start, len - start);
+    } else {
+        words_markup_names(buf + start, len - start);   /* links, all but its heading */
+    }
     words_end();
 }
 
@@ -692,7 +709,7 @@ void render_begin(int t, const block* head)
     words_text(tp->title, 1);           /* first: a word's posting says it is in the title */
     block_head(B_HEAD, 1, 0, tp->level >= 1 ? (tp->level > 4 ? 4 : tp->level) : 1, 0);
     if (tp->heading) {
-        put_inline(&pages[tp->page], head->no, head->text);
+        put_inline(&pages[tp->page], head->no, head->text, WORDS_ALL);
         put(END);
     } else {
         const char* s = tp->title;
@@ -701,7 +718,7 @@ void render_begin(int t, const block* head)
             put(agon_char(&s));
         }
         put(END);
-        words_of(0);
+        words_of(0, WORDS_ALL);
     }
 }
 

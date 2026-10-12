@@ -225,7 +225,7 @@ once, and writes each topic as soon as it can:
 | outline | [`book.c`](../src/md2ref/book.c) | topics from headings as they come, anchors as Python-Markdown makes them, links resolved or left pending |
 | markup | [`render.c`](../src/md2ref/render.c), [`inline.c`](../src/md2ref/inline.c) | each topic in ref's markup, tables laid out, its words taken as it is written, and held until its descendants are read |
 | text | [`write.c`](../src/md2ref/write.c), [`lz4w.c`](../src/md2ref/lz4w.c) | each topic, complete, to the text's scratch file: stored as an LZ4 block of literals, or with `-z` compressed |
-| indexes | [`index.c`](../src/md2ref/index.c) | keys from headings' code spans, VDU sequences and title words, normalised by the reader core's own [`normalize.c`](../src/core/normalize.c); every word of every topic to the words' scratch file |
+| indexes | [`index.c`](../src/md2ref/index.c) | keys from headings' code spans, VDU sequences and title words, normalised by the reader core's own [`normalize.c`](../src/core/normalize.c); each topic's names -- title, headings, code spans, links' labels, emphasis -- or with `-f` every word, to the words' scratch file |
 | document | [`write.c`](../src/md2ref/write.c) | the tables from memory, the text copied in with each link patched, the words sorted and merged in |
 
 **One pass, in fixed memory,** as aed, acc and zap work. The window holds
@@ -273,21 +273,22 @@ reads as it reads any, so the format is the same; the document is about
 a packed topic as big as the largest topic.
 
 All of agon-docs, 637 KB of Markdown and 721 topics, peaks at about
-273 KB on the Agon (`make agon-md2ref-heap` measures it, and
+218 KB on the Agon, 273 KB with `-f` (`make agon-md2ref-heap` measures it, and
 `test/md2ref.sh` holds it to a budget). What grows with a document is its
 outline: its topics, their titles and anchors, and its keys. The heap is
 333 KB, and agondev's allocator never gives back part of a block -- realloc
 makes a block bigger by copying it, and smaller not at all -- so what is
-big is taken once, early: the words' dictionary, a fixed 40 KB at the
-bottom of the heap, with its 16 KB table freed once the pages are read.
+big is taken once, early: the words' dictionary, a fixed 24 KB at the
+bottom of the heap (40 KB with `-f`), with its table freed once the pages
+are read.
 Grown a piece at a time, as it was, it left no room for a large topic.
 
 It ends with "Done in N.NN seconds", worded as zap and acc word it, from
 MOS's clock. Under an emulator running flat out that clock means nothing,
 so `make agon-md2ref-cycles` builds one that has the emulator count its
 cycles instead (IO ports 0x40 and 0x41, fab-agon-emulator 2037657 on), as
-acc's bench does. All of agon-docs takes 708 million cycles: 38 seconds
-at the Agon's 18.432 MHz. That is a lower bound. The count is exact for
+acc's bench does. All of agon-docs takes 506 million cycles: 27 seconds
+at the Agon's 18.432 MHz (708 million with `-f`). That is a lower bound. The count is exact for
 the eZ80's own work, but the emulator charges nothing for reading the SD
 card, and md2ref reads its pages and three scratch files. The ports are
 written around the work alone, so loading and MOS's start-up are not

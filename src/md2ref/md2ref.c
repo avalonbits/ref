@@ -1,8 +1,8 @@
 /*
  * md2ref: Markdown pages compiled into a ref document. See md2ref.h.
  *
- *   md2ref [-t <title>] [-w] [-z] <name> [<dir> | <page.md>...]
- *   md2ref [-t <title>] [-w] [-z] -o <file.dat> <dir> | <page.md>...
+ *   md2ref [-t <title>] [-w] [-z] [-f] <name> [<dir> | <page.md>...]
+ *   md2ref [-t <title>] [-w] [-z] [-f] -o <file.dat> <dir> | <page.md>...
  *
  *   <name>  the document: ref-doc/<name>.dat, where a program keeps its
  *           own, ref-doc made if it is not there; the pages, if none are
@@ -13,6 +13,10 @@
  *   -z      compress each topic's text: a smaller document, but compressing
  *           takes as long as all the rest on the Agon; else each topic is
  *           stored as it is, an LZ4 block of literals any reader reads
+ *   -f      put every word of every topic in the search's index; else only
+ *           the names -- each topic's title and headings, and what is in a
+ *           code span, a link's label or an emphasis -- which is a tenth of
+ *           the words, and of the time indexing them took
  *   -e      errors and warnings into this file too, which is made even
  *           when there are none: ade reads it after a build
  *   @list   the pages named in this file, one a line: a build.obey line
@@ -60,6 +64,7 @@
 int md_errors;
 int md_keep_going;
 int md_compress;
+int md_full_text;
 
 static FILE* errors;        /* -e */
 
@@ -313,8 +318,8 @@ static int read_list(const char* path, char** inputs, int* n, int max)
 
 static int usage(void)
 {
-    printf("usage: md2ref [-t <title>] [-w] [-z] [-e <file>] <name> [<dir> | <page.md>... | @list]\n"
-           "       md2ref [-t <title>] [-w] [-z] [-e <file>] -o <file.dat> <dir> | <page.md>... | @list\n"
+    printf("usage: md2ref [-t <title>] [-w] [-z] [-f] [-e <file>] <name> [<dir> | <page.md>... | @list]\n"
+           "       md2ref [-t <title>] [-w] [-z] [-f] [-e <file>] -o <file.dat> <dir> | <page.md>... | @list\n"
            "  <name> writes " DOC_DIR "/<name>.dat, from the current directory's pages\n"
            "  if none are given; @list names the pages in a file, one a line\n");
 
@@ -435,6 +440,8 @@ int main(int argc, char** argv)
             md_keep_going = 1;
         } else if (strcmp(argv[i], "-z") == 0) {
             md_compress = 1;
+        } else if (strcmp(argv[i], "-f") == 0) {
+            md_full_text = 1;
         } else if (strcmp(argv[i], "-e") == 0 && i + 1 < argc) {
             error_file = argv[++i];
         } else if (argv[i][0] == '-') {

@@ -143,9 +143,37 @@ class Md2ref(unittest.TestCase):
         self.assertEqual([g.split(' |')[0] for g in got],
                          ['1 1 3', '1 1 4', '1 1 4', '1 1 4', '1 1 5'])
 
+    def test_only_names_are_searched_by_default(self):
+        # Without -f, the words in the search's index are the names: each
+        # topic's title and headings, a note's title, and what is in a code
+        # span, a link's label or an emphasis -- in prose and in a table,
+        # whose header is emphasised -- each word cut where its span ends.
+        # Not the prose around them, a code block or a table's plain cells.
+        page = ('# Title tword\n\nProse pword and `cword` and [lword](#title-tword) and *eword* '
+                'and pre`postw`. `cut`Tail\n\n## Head hword\n\ntext\n\n'
+                '!!! note "Note nword"\n    body bword\n\n'
+                '```\ncode kword\n```\n\n'
+                '| Hcol thword | B |\n|---|---|\n| plain tpword | `tcword` |\n')
+        words = ['tword', 'cword', 'lword', 'eword', 'postw', 'hword', 'nword', 'thword',
+                 'tcword', 'pword', 'prepostw', 'bword', 'kword', 'tpword', 'cuttail']
+        p, data, left = compile_pages({'index.md': page})
+        self.assertEqual(p.returncode, 0, p.stdout)
+        got = [g.split()[0] for g in ask(data, 'search', words).splitlines()]
+        self.assertEqual(got, ['1'] * 9 + ['0'] * 6)
+        # The word in `cut` ends with the span: no Tail after it, nor the
+        # span's closing code, in any word.
+        at, end = struct.unpack_from('<II', data, 76)       # words, word directory
+        self.assertNotIn(b'tail', data[at:end].lower())
+        self.assertNotIn(b'\x13', data[at:end])
+        # With -f, every word -- and pre`postw` is one word, prepostw, so
+        # postw alone is none; `cut`Tail is cuttail.
+        p, data, left = compile_pages({'index.md': page}, '-f')
+        got = [g.split()[0] for g in ask(data, 'search', words).splitlines()]
+        self.assertEqual(got, ['1'] * 4 + ['0'] + ['1'] * 10)
+
     def test_body_words_are_searched(self):
-        # One hit each: topic, query words in its title, query words matched.
-        got = ask(compile_doc('doc'), 'search', ['frobs', 'converts']).splitlines()
+        # With -f. One hit each: topic, query words in its title, query words matched.
+        got = ask(compile_doc('-f', 'doc'), 'search', ['frobs', 'converts']).splitlines()
         self.assertEqual(got, ['1 3:0:1', '1 4:0:1'])
 
     def test_which_text_makes_words(self):
@@ -153,7 +181,7 @@ class Md2ref(unittest.TestCase):
         # stop words, all-digit runs, and runs of only _ and $: here doc
         # (the title), words, $ff, x86, upper, x_1, 9_9 and $12.
         p, data, left = compile_pages({'index.md': '# Doc\n\nWords: 1234 2048 $$$ ___ $_$ $ff x86 _x zz '
-                                                   'Through UPPER further the x_1 9_9 $12.\n'})
+                                                   'Through UPPER further the x_1 9_9 $12.\n'}, '-f')
         self.assertEqual(p.returncode, 0, p.stdout)
         self.assertIn('words 8\n', ask(data, 'info'))
         self.assertEqual(ask(data, 'search', ['upper', 'x86']).splitlines(),
@@ -209,7 +237,7 @@ class Md2ref(unittest.TestCase):
             # takes well under a second, which a clock read in the wrong
             # units would not.
             self.assertRegex(p.stdout,
-                             r'^md2ref: ref-doc/myprog\.dat: 2 pages, 6 topics, 14 keys, 43 words\n'
+                             r'^md2ref: ref-doc/myprog\.dat: 2 pages, 6 topics, 14 keys, 18 words\n'
                              r'Done in 0\.\d\d seconds\n$')
             with open(os.path.join(proj, 'ref-doc', 'myprog.dat'), 'rb') as f:
                 self.assertEqual(f.read(), compile_doc('doc'))
@@ -308,7 +336,7 @@ class Md2ref(unittest.TestCase):
         page = ('# One\n\n' + filler('alpha', 5) + '## One A\n\n' + filler('aardvark', 250)
                 + '### A1\n\nFirst.\n\n### A2\n\nSecond.\n\n## One B\n\nBee.\n\n# Two\n\nZebra.\n')
         other = '# Other\n\nSee [One B](multi.md#one-b) and [Two](multi.md#two).\n'
-        p, data, left = compile_pages({'index.md': other, 'multi.md': page})
+        p, data, left = compile_pages({'index.md': other, 'multi.md': page}, '-f')
         self.assertEqual(p.returncode, 0, p.stdout)
         contents = [c.strip() for c in ask(data, 'contents').splitlines()]
         self.assertEqual(contents, ['Other  [0]', 'multi  [1]', 'One  [2]', 'One A  [3]',
@@ -338,7 +366,7 @@ class Md2ref(unittest.TestCase):
         code = '```\n' + 'y = 2\n' * 3400 + 'endofcode\n```\n\n'
         page = '# Long\n\n' + ''.join('## Part %d\n\n' % k + filler('part%d' % k, 20)
                                        + (code if k == 50 else '') for k in range(100))
-        p, data, left = compile_pages({'index.md': page})
+        p, data, left = compile_pages({'index.md': page}, '-f')
         self.assertEqual(p.returncode, 0, p.stdout)
         self.assertEqual(ask(data, 'info').split('\ntopics ')[1].split('\n')[0], '101')
         got = ask(data, 'search', ['part0', 'part57', 'part99', 'endofcode']).splitlines()
@@ -371,7 +399,7 @@ class Md2ref(unittest.TestCase):
         # them holds, so it grows. One is in the title as well, which
         # marks it so however many times the text says it.
         body = ' '.join('w%dz' % k for k in range(200))
-        p, data, left = compile_pages({'index.md': '# Doc w7z\n\n%s\n\n%s\n' % (body, body)})
+        p, data, left = compile_pages({'index.md': '# Doc w7z\n\n%s\n\n%s\n' % (body, body)}, '-f')
         self.assertEqual(p.returncode, 0, p.stdout)
         self.assertIn('words 201\n', ask(data, 'info'))       # and doc
         self.assertEqual(ask(data, 'search', ['w0z', 'w7z', 'w199z']).splitlines(),
@@ -387,7 +415,7 @@ class Md2ref(unittest.TestCase):
         heads = ''.join('## H%d\n\ntext\n\n' % k for k in range(1, 100))
         page = ('# T\n\nfoo**bar**baz and Hel*lo*There MixedCase and pre[mid](#h97)post\n\n'
                 '```\nab↓cd\nline two\n```\n\n' + heads)
-        p, data, left = compile_pages({'index.md': page})
+        p, data, left = compile_pages({'index.md': page}, '-f')
         self.assertEqual(p.returncode, 0, p.stdout)
         self.assertIn(b'pre\x14a\x00mid\x15post', b''.join(views(data)))
         got = ask(data, 'search', ['foobarbaz', 'hellothere', 'mixedcase', 'premidpost', 'abvcd',
@@ -485,7 +513,7 @@ class Md2ref(unittest.TestCase):
         # The words are read from the markup as its plain text would give
         # them: a code span's marks and a link's join what is either side
         # (foobar, ablnkok), and a line break parts them (one, two).
-        p, data, left = compile_pages({'index.md': '# Tee\n\nfoo`bar` ab[lnk](#tee)ok one<br>two\n'})
+        p, data, left = compile_pages({'index.md': '# Tee\n\nfoo`bar` ab[lnk](#tee)ok one<br>two\n'}, '-f')
         self.assertEqual(p.returncode, 0, p.stdout)
         self.assertEqual(ask(data, 'search', ['foobar', 'ablnkok', 'one', 'two', 'onetwo']).splitlines(),
                          ['1 0:0:1', '1 0:0:1', '1 0:0:1', '1 0:0:1', '0'])
@@ -618,7 +646,7 @@ class Md2ref(unittest.TestCase):
         # last word's entry does.
         page = '# Many\n\n' + 'y' * 23 + 'q\n\n' + ''.join('## T%d\n\n%s\n\n' % (k, ' '.join(
             'z%sq' % name for name in ['%05d' % (k * 100 + j) for j in range(100)])) for k in range(60))
-        p, data, left = compile_pages({'index.md': page})
+        p, data, left = compile_pages({'index.md': page}, '-f')
         self.assertEqual(p.returncode, 0, p.stdout)
         self.assertIn('words %d\n' % (6000 + 1 + 50 + 1 + 1), ask(data, 'info'))  # many, t10-t59, section, y
         got = ask(data, 'search', ['z00000q', 'z03017q', 'z05999q']).splitlines()
@@ -635,7 +663,7 @@ class Md2ref(unittest.TestCase):
         # topics, gathered a range of words a pass, each word every topic.
         common = ' '.join('w%sz' % chr(ord('a') + j % 26) * (1 + j // 26) for j in range(90))
         page = '# Top\n\n' + ''.join('## Part %d\n\n%s\n\n' % (k, common) for k in range(400))
-        p, data, left = compile_pages({'index.md': page})
+        p, data, left = compile_pages({'index.md': page}, '-f')
         self.assertEqual(p.returncode, 0, p.stdout)
         for word in ('waz', 'wlzwlz', 'wyzwyzwyz', 'wzz'):     # the last sort into a later pass
             got = ask(data, 'search', [word]).splitlines()
@@ -657,7 +685,7 @@ class Md2ref(unittest.TestCase):
         page = '# Words\n\n' + ''.join(
             '## T%d\n\n%s\n\n' % (k, ' '.join('w%dq%s' % (k, c) for c in 'abcdefghijklmnop'))
             for k in range(250))
-        p, data, left = compile_pages({'index.md': page})
+        p, data, left = compile_pages({'index.md': page}, '-f')
         self.assertEqual(p.returncode, 0, p.stdout)
         # 16 for each, its title (T10 on: three letters), Words, and
         # section: Words is too big to show its children, so links to them.

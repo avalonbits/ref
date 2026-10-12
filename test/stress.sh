@@ -20,6 +20,10 @@ declare -A BUDGET=(
     [run]=13000 [span]=9300 [spans]=10500 [table]=3600 [unclosed]=5700
 )
 
+# The cases made to load the search's index, with every word in it (-f):
+# without, only names are, and these would say nothing of it.
+declare -A FLAGS=([common]=-f [prefix]=-f)
+
 if [ ! -x "$CYCLES_EMU/agon-cli-emulator" ]; then
     echo "SKIP  stress: no emulator that counts at $CYCLES_EMU"
 
@@ -40,7 +44,7 @@ for d in "$SCRATCH"/cases/*/; do
     cases+=("$c")
     mkdir -p "$sd/s/$c"
     cp "$d"*.md "$sd/s/$c/"
-    printf 'md2ref -w -o /o.dat /s/%s\r\n' "$c" >> "$sd/autoexec.txt"
+    printf 'md2ref -w %s-o /o.dat /s/%s\r\n' "${FLAGS[$c]:+${FLAGS[$c]} }" "$c" >> "$sd/autoexec.txt"
 done
 console=$(EMU=$CYCLES_EMU emu_run "$sd" 1800)
 mapfile -t counts < <(sed -n 's/.*Debug OUT(0x41): \([0-9]*\) CPU cycles.*/\1/p' <<< "$console")

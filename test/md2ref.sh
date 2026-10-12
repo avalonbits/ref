@@ -82,7 +82,7 @@ fi
 # The time: the cycles from port 0x40's write to 0x41's, which the
 # emulator prints on the host, over the eZ80's 18.432 MHz.
 CYCLES_EMU=${CYCLES_EMU:-$HOME/fab-agon-emulator-2037657}
-BUDGET=1170
+BUDGET=840
 if [ -z "$BIG" ]; then
     echo "SKIP  md2ref's time on the Agon: no build/cache (make dat)"
 elif [ ! -x "$CYCLES_EMU/agon-cli-emulator" ]; then
@@ -112,17 +112,22 @@ fi
 # budget that leaves room on the Agon (333 KB of heap, and agondev's
 # allocator gives none back to a block grown or cut, so the holes count
 # too): so a change that holds more, or longer, is caught here.
-HEAP_BUDGET=280000
+HEAP_BUDGET=230000
+HEAP_BUDGET_F=280000        # -f: every word in the search's index
 if [ -n "$BIG" ] && make -s -C "$ROOT" agon-md2ref-heap > /dev/null; then
-    sd=$(emu_card)
-    cp "$ROOT/bin/md2ref-heap/md2ref.bin" "$sd/bin/md2ref.bin"
-    mkdir -p "$sd/big"
-    cp "$SCRATCH"/big/*.md "$sd/big/"
-    printf '%s\r\n' 'md2ref -w -o /big.dat /big' > "$sd/autoexec.txt"
-    peak=$(emu_run "$sd" 900 | sed -n 's/^peak \([0-9]*\) bytes.*/\1/p' | head -1)
-    check "md2ref on the Agon: its heap within $HEAP_BUDGET bytes on agon-docs" \
-          "$([ "${peak:-0}" -gt 0 ] && [ "$peak" -le "$HEAP_BUDGET" ] && echo within || echo "${peak:-none}")" within
-    [ -n "$peak" ] && printf 'HEAP  all of agon-docs: a peak of %d bytes\n' "$peak"
+    for flags in "" "-f "; do
+        budget=$HEAP_BUDGET
+        [ -n "$flags" ] && budget=$HEAP_BUDGET_F
+        sd=$(emu_card)
+        cp "$ROOT/bin/md2ref-heap/md2ref.bin" "$sd/bin/md2ref.bin"
+        mkdir -p "$sd/big"
+        cp "$SCRATCH"/big/*.md "$sd/big/"
+        printf 'md2ref -w %s-o /big.dat /big\r\n' "$flags" > "$sd/autoexec.txt"
+        peak=$(emu_run "$sd" 900 | sed -n 's/^peak \([0-9]*\) bytes.*/\1/p' | head -1)
+        check "md2ref ${flags}on the Agon: its heap within $budget bytes on agon-docs" \
+              "$([ "${peak:-0}" -gt 0 ] && [ "$peak" -le "$budget" ] && echo within || echo "${peak:-none}")" within
+        [ -n "$peak" ] && printf 'HEAP  all of agon-docs, md2ref %s- a peak of %d bytes\n' "${flags:-without -f }" "$peak"
+    done
 fi
 [ -n "${KEEP:-}" ] && cp "$sd/proj/ref-doc/myprog.dat" "$SCRATCH/pc.dat" "$KEEP/"
 [ $status = 0 ] || printf '%s\n' "$console" | tail -30

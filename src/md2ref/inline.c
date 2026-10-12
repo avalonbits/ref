@@ -112,6 +112,8 @@ static uint8_t cls_code[256];       /* code: spaces as they are, a newline stops
  * a code is inside it, so words_span reads it again as words_markup
  * would; and a LINK's two bytes are not text (w_skip). */
 static uint8_t words_on;
+static uint8_t names_only;          /* WORDS_NAMES: words_on only inside a name */
+static uint8_t name_depth;          /* the codes, links and emphases open */
 static uint8_t* w_start;
 static uint8_t w_odd;
 static uint8_t w_skip;
@@ -169,6 +171,25 @@ static NOINLINE void word_byte(uint8_t b)
     }
 }
 
+/* A code that opens or closes a name, without -f: words are taken from
+ * the first opened to the last closed, the word being written cut there. */
+static NOINLINE int name_edge(uint8_t b)
+{
+    if (b == EM_ON || b == CODE_ON || b == LINK) {
+        name_depth++;
+        words_on = 1;
+    } else if ((b == EM_OFF || b == CODE_OFF || b == LINK_END) && name_depth && !--name_depth) {
+        if (w_start) {
+            word_end(out + written - 1);
+        }
+        words_on = 0;
+
+        return 1;                       /* nothing more of it for the words */
+    }
+
+    return 0;
+}
+
 static void put(int b)
 {
     if (written < room) {
@@ -177,6 +198,8 @@ static void put(int b)
     written++;
     if (b >= 0x20) {
         last_space = b == ' ';
+    } else if (names_only && name_edge((uint8_t)b)) {
+        return;
     }
     if (words_on) {
         word_byte((uint8_t)b);
@@ -952,7 +975,9 @@ int inline_markup(const page* p, int no, const char* s, uint8_t* o, int size, li
     if (!cls_plain['a']) {
         make_special();
     }
-    words_on = (uint8_t)words;
+    words_on = (uint8_t)(words == WORDS_ALL);
+    names_only = (uint8_t)(words == WORDS_NAMES);
+    name_depth = 0;
     w_start = NULL;
     w_skip = 0;
     out = o;
@@ -971,6 +996,7 @@ int inline_markup(const page* p, int no, const char* s, uint8_t* o, int size, li
         word_end(out + written);            /* only codes and its END come after */
     }
     words_on = 0;
+    names_only = 0;
     ix_base = ix_text = NULL;
     /* No space to end with. */
     if (written > 0 && written <= room && out[written - 1] == ' ') {
@@ -982,14 +1008,15 @@ int inline_markup(const page* p, int no, const char* s, uint8_t* o, int size, li
 
 /* --- code ------------------------------------------------------------------------- */
 
-int code_markup(const char* s, uint8_t* o, int size)
+int code_markup(const char* s, uint8_t* o, int size, int words)
 {
     const char* e = s + strlen(s);
 
     if (!cls_plain['a']) {
         make_special();
     }
-    words_on = 1;
+    words_on = (uint8_t)(words == WORDS_ALL);
+    names_only = 0;
     w_start = NULL;
     w_skip = 0;
     out = o;
@@ -1031,7 +1058,7 @@ void inline_plain(const char* s, char* o, int size)
     int n;
 
     plain_only = 1;
-    n = inline_markup(NULL, 0, s, buf, (int)sizeof buf, no_links, 0);
+    n = inline_markup(NULL, 0, s, buf, (int)sizeof buf, no_links, WORDS_NONE);
     plain_only = 0;
     int j = 0;
     int k;

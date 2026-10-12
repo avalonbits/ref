@@ -117,7 +117,10 @@ such as `/config/ref/docs/myprog.dat` to install it for everyone.
 command line holds. `-t` sets the title (else the first page's first
 heading), `-w` makes a link that leads nowhere a warning instead of an
 error, and `-e <file>` writes the errors and warnings to that file as well
-as the console -- the file is made even when there are none.
+as the console -- the file is made even when there are none. `-f` puts
+every word in the search's index, not only the names (below), and `-z`
+compresses each topic: both make md2ref slower on the Agon, `-z` by about
+a quarter, for a document about 30% smaller.
 
 ade compiles a program's Markdown, wherever it is, into the program's
 `ref-doc/`; `ref myprog`, run in `ref-doc/`, reads it, and
@@ -130,6 +133,8 @@ ade compiles a program's Markdown, wherever it is, into the program's
 - **Keys**: a heading is found by each code span in it, by the VDU
   sequence it names, and by the words of its title. `` ## `strtol`,
   `strtoul` `` makes `ref <doc> strtoul` go straight to it. The search
+  covers the names: each topic's title and headings, and what is in a
+  code span, a link's label or an emphasis -- in a table too. With `-f` it
   covers every word of every topic.
 - **Links** between pages, `[text](page.md#anchor)`, are followed in ref.
   An anchor is a heading's, made as MkDocs makes them, or one set with
