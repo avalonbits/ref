@@ -272,20 +272,29 @@ static unsigned pool_len;
 static unsigned* title_at;      /* each topic's title's offset */
 static unsigned book_title_at;
 
+/* Each title in the pool once, found through a hash of the titles in it:
+ * slots hold a title's offset + 1, 0 for none, twice as many as titles. */
+static unsigned* title_slot;
+static unsigned title_slots;                /* a power of two */
+
 static unsigned add_title(const char* s)
 {
     unsigned n = (unsigned)strlen(s);
-    unsigned k = 0;
+    unsigned h;
+    unsigned mask = title_slots - 1;
+    unsigned k;
 
     if (n > 255) {
         n = 255;
     }
-    while (k < pool_len) {
+    for (h = md_hash(0, s, n) & mask; title_slot[h]; h = (h + 1) & mask) {
+        k = title_slot[h] - 1;
         if (pool[k] == n && memcmp(pool + k + 1, s, n) == 0) {
             return k;
         }
-        k += 1 + pool[k];
     }
+    k = pool_len;
+    title_slot[h] = k + 1;
     pool[pool_len] = (uint8_t)n;
     memcpy(pool + pool_len + 1, s, n);
     pool_len += 1 + n;
@@ -303,10 +312,16 @@ static void make_titles(void)
     }
     pool = arena_alloc(size);
     title_at = arena_alloc((unsigned)ntopics * sizeof(unsigned));
+    for (title_slots = 64; title_slots < (unsigned)(ntopics + 1) * 2; title_slots *= 2) {
+    }
+    title_slot = md_realloc(NULL, title_slots * (unsigned)sizeof(unsigned));
+    memset(title_slot, 0, title_slots * sizeof(unsigned));
     for (t = 0; t < ntopics; t++) {
         title_at[t] = add_title(topics[t].title);
     }
     book_title_at = add_title(book_title);
+    free(title_slot);
+    title_slot = NULL;
 }
 
 /* --- the document -------------------------------------------------------------- */

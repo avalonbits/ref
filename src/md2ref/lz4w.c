@@ -108,7 +108,7 @@ static int fixed_from(const unsigned* fixed, int n, unsigned p)
     int hi = n;
 
     while (lo < hi) {
-        int mid = (lo + hi) / 2;
+        int mid = (int)((unsigned)(lo + hi) >> 1);
 
         if (fixed[mid] + 1 < p) {
             lo = mid + 1;
@@ -120,25 +120,27 @@ static int fixed_from(const unsigned* fixed, int n, unsigned p)
     return lo;
 }
 
-/* How much of a match of mlen from p it may take: up to the first
- * placeholder byte in it. */
-static unsigned clear_of(const unsigned* fixed, int n, unsigned p, unsigned mlen)
-{
-    int f = fixed_from(fixed, n, p);
-
-    if (f < n && fixed[f] < p + mlen) {
-        return fixed[f] > p ? fixed[f] - p : 0;
-    }
-
-    return mlen;
-}
-
 #if defined(AGONDEV)
-/* lz4scan.s: scan, by hand. */
+/* lz4scan.s: scan and extend, by hand. */
 unsigned lz4_scan(const uint8_t* src, unsigned n, unsigned* pi, unsigned* pcand);
+unsigned lz4_extend(const uint8_t* a, const uint8_t* b, unsigned max);
 #define SCAN lz4_scan
+#define EXTEND lz4_extend
 #else
 #define SCAN scan
+#define EXTEND extend
+
+/* How many bytes from a and b are the same, to max. */
+static unsigned extend(const uint8_t* a, const uint8_t* b, unsigned max)
+{
+    unsigned k = 0;
+
+    while (k < max && a[k] == b[k]) {
+        k++;
+    }
+
+    return k;
+}
 
 /* The entry of head for the four bytes at p: the low half's top seven
  * bits and the high half's low five. */
@@ -157,9 +159,9 @@ static unsigned hash(const uint8_t* p)
 }
 
 /* From *pi on, each position's hash into head, until one whose latest
- * earlier position of the same hash starts a match of MIN_MATCH bytes or
- * more: its length, with the position in *pi and the match's start + 1 in
- * *pcand. 0 when there is none before the last four bytes. This is where
+ * earlier position of the same hash starts with the same MIN_MATCH bytes:
+ * MIN_MATCH, with the position in *pi and the earlier one + 1 in *pcand.
+ * 0 when there is none before the last four bytes. This is where
  * compressing spends its time: almost every byte goes through here, and
  * only a match leaves it. */
 static unsigned scan(const uint8_t* src, unsigned n, unsigned* pi, unsigned* pcand)
@@ -174,16 +176,12 @@ static unsigned scan(const uint8_t* src, unsigned n, unsigned* pi, unsigned* pca
         if (e > lz4_head_base) {
             const uint8_t* a = src + (e - lz4_head_base - 1);
             const uint8_t* b = src + i;
-            unsigned mlen = 0;
 
-            while (i + mlen < n && a[mlen] == b[mlen]) {
-                mlen++;
-            }
-            if (mlen >= MIN_MATCH) {
+            if (a[0] == b[0] && a[1] == b[1] && a[2] == b[2] && a[3] == b[3]) {
                 *pi = i;
                 *pcand = e - lz4_head_base;
 
-                return mlen;
+                return MIN_MATCH;
             }
         }
         i++;
@@ -204,6 +202,8 @@ unsigned lz4_compress(const uint8_t* src, unsigned n, uint8_t* dst, unsigned roo
     unsigned o = 0;
     unsigned at;
     int f = 0;                  /* the first placeholder not yet placed */
+    const unsigned* fg = fixed;     /* the first not yet behind i, walked: no index to multiply */
+    const unsigned* fend = fixed + nfixed;
 
     (void)room;                 /* the caller gives n + n / 255 + 16 */
     if (!mixed) {
@@ -214,23 +214,45 @@ unsigned lz4_compress(const uint8_t* src, unsigned n, uint8_t* dst, unsigned roo
         memset(lz4_head, 0, sizeof lz4_head);
         lz4_head_base = 0;
     }
-    for (;;) {
+    /* The text between placeholders, a stretch at a time: a match starts
+     * and ends inside one, so none takes a placeholder in on this side --
+     * and the other side's, the earlier text's, is found before the match
+     * is extended, so a match is never extended past where it must stop,
+     * and then again from the next byte. */
+    while (i + MIN_MATCH <= n) {
         unsigned cand;
-        unsigned mlen = i + MIN_MATCH <= n ? SCAN(src, n, &i, &cand) : 0;
-        const uint8_t* b = src + i;
+        unsigned stop;
+        unsigned limit;
+        unsigned mlen;
+        int k;
 
-        if (!mlen) {
-            break;
+        while (fg < fend && *fg + 2 <= i) {
+            fg++;
         }
-        /* A placeholder is the two bytes after a LINK, and both sides of a
-         * match are the same bytes: only a match with a LINK in it, or
-         * that starts on what could be a placeholder's second byte, can
-         * take one in. Most have neither, and need no search. */
-        if (nfixed && (b[0] == 0xFF || memchr(b, REF_LINK, mlen))) {
-            mlen = clear_of(fixed, nfixed, i, mlen);
-            mlen = clear_of(fixed, nfixed, cand - 1, mlen);
+        if (fg < fend && *fg <= i) {
+            i = *fg + 2;                    /* a placeholder's bytes start nothing */
+            continue;
         }
-        if (mlen >= MIN_MATCH) {
+        stop = fg < fend ? *fg : n;
+        if (i + MIN_MATCH > stop || !SCAN(src, stop, &i, &cand)) {
+            i = stop;
+            continue;
+        }
+        limit = stop - i;
+        /* A placeholder in the earlier text's way is one between it and i
+         * -- those from g on are past where this match can reach. */
+        if (fg > fixed && fg[-1] + 1 >= cand) {
+            k = fixed_from(fixed, (int)(fg - fixed), cand);
+            if (fixed[k] - (cand - 1) < limit) {
+                limit = fixed[k] - (cand - 1);
+            }
+        }
+        if (limit < MIN_MATCH) {
+            i++;
+            continue;
+        }
+        mlen = MIN_MATCH + EXTEND(src + cand - 1 + MIN_MATCH, src + i + MIN_MATCH, limit - MIN_MATCH);
+        {
             unsigned start = o;
 
             /* Placeholders are literals: among these, before i. */
@@ -240,8 +262,6 @@ unsigned lz4_compress(const uint8_t* src, unsigned n, uint8_t* dst, unsigned roo
             }
             i += mlen;
             lit = i;
-        } else {
-            i++;
         }
     }
     {

@@ -153,6 +153,7 @@ static void make_settings(void)
 typedef struct interned interned;
 struct interned {
     interned* next;
+    unsigned hash;
     unsigned last;          /* its latest entry + 1; 0 for none yet */
     char key[1];
 };
@@ -163,32 +164,57 @@ typedef struct {
     uint8_t in_title;
 } entry;
 
-#define BUCKETS 1024
-
-static interned* bucket[BUCKETS];
+/* Twice as many buckets as keys at most, so a chain is a key or two
+ * however many there are. */
+static interned** bucket;
+static unsigned nbuckets;                   /* a power of two */
+static unsigned ninterned;
 static entry* entries;
 static unsigned nentries;
 static unsigned max_entries;
 
+static void more_buckets(void)
+{
+    unsigned old = nbuckets;
+    interned** was = bucket;
+    unsigned k;
+
+    nbuckets = nbuckets ? nbuckets * 2 : 1024;
+    bucket = md_realloc(NULL, nbuckets * (unsigned)sizeof(interned*));
+    memset(bucket, 0, nbuckets * sizeof(interned*));
+    for (k = 0; k < old; k++) {
+        interned* w = was[k];
+
+        while (w) {
+            interned* next = w->next;
+
+            w->next = bucket[w->hash & (nbuckets - 1)];
+            bucket[w->hash & (nbuckets - 1)] = w;
+            w = next;
+        }
+    }
+    free(was);
+}
+
 static interned* intern(const char* key, int len)
 {
-    unsigned h = 0;
+    unsigned h;
     interned* w;
-    int k;
 
-    for (k = 0; k < len; k++) {
-        h = h * 31 + (uint8_t)key[k];
-    }
-    h %= BUCKETS;
-    for (w = bucket[h]; w; w = w->next) {
-        if (strncmp(w->key, key, (size_t)len) == 0 && w->key[len] == 0) {
+    h = md_hash(0, key, (unsigned)len);
+    for (w = bucket[h & (nbuckets - 1)]; w; w = w->next) {
+        if (w->hash == h && strncmp(w->key, key, (size_t)len) == 0 && w->key[len] == 0) {
             return w;
         }
     }
+    if (++ninterned > nbuckets * 2) {
+        more_buckets();
+    }
     w = arena_alloc((unsigned)(sizeof(interned) + len));
     memcpy(w->key, key, (size_t)len);
-    w->next = bucket[h];
-    bucket[h] = w;
+    w->hash = h;
+    w->next = bucket[h & (nbuckets - 1)];
+    bucket[h & (nbuckets - 1)] = w;
 
     return w;
 }
@@ -196,7 +222,10 @@ static interned* intern(const char* key, int len)
 /* Entries start again, and the keys with them. */
 static void new_entries(void)
 {
-    memset(bucket, 0, sizeof bucket);
+    free(bucket);
+    bucket = NULL;
+    nbuckets = ninterned = 0;
+    more_buckets();
     nentries = 0;
 }
 
@@ -242,7 +271,7 @@ static void sort_entries(void)
     if (nentries == 0) {
         return;                             /* no keys: every word a stop word */
     }
-    qsort(entries, nentries, sizeof(entry), by_key);
+    md_sort(entries, nentries, (unsigned)sizeof(entry), by_key);
     for (k = 0; k < nentries; k++) {
         if (o && strcmp(entries[o - 1].key, entries[k].key) == 0
             && entries[o - 1].topic == entries[k].topic) {
@@ -454,7 +483,7 @@ void make_keys(void)
         if (!h) {
             continue;
         }
-        for (i = 0; inline_code(h, i, code, (int)sizeof code); i++) {
+        for (i = 0; inline_code(h, &i, code, (int)sizeof code);) {
             add_key(code, t);
             if (vdu_key(code, key)) {
                 add_entry(key, (int)strlen(key), t, 0);
@@ -471,6 +500,9 @@ void make_keys(void)
     arena_back(interned_keys);
     free(entries);
     entries = NULL;
+    free(bucket);                       /* its keys went with arena_back */
+    bucket = NULL;
+    nbuckets = ninterned = 0;
     nentries = max_entries = 0;
 }
 
@@ -498,15 +530,29 @@ static unsigned nslots;             /* a power of two, at least twice the words 
 static unsigned slot_cap;
 static unsigned nwords;
 static unsigned word_topic;
-static uint16_t mix[256];
 
 #define FIRST_SLOTS 64
 
-/* Of the bytes of a word that tell words apart most: adds and lookups,
- * which the eZ80 does in line, where a multiply or a shift is a call. */
+/* Pearson's hash of the bytes of a word that tell words apart most -- its
+ * length, its first two letters, its middle one and its last -- each two
+ * 8-bit lookups, not the whole word through md_hash: a word that shares
+ * them all with another is told apart by the comparison after. */
 static unsigned word_hash(const uint8_t* w, unsigned len)
 {
-    return mix[w[0]] + mix[(uint8_t)(w[len - 1] + len)] + mix[(uint8_t)(w[1] ^ w[len >> 1] ^ 0xA5)];
+    const uint8_t* t = md_pearson;
+    uint8_t a = t[(uint8_t)len];
+    uint8_t b = t[(uint8_t)(len + 1)];
+
+    a = t[a ^ w[0]];
+    b = t[b ^ w[0]];
+    a = t[a ^ w[1]];
+    b = t[b ^ w[1]];
+    a = t[a ^ w[len >> 1]];
+    b = t[b ^ w[len >> 1]];
+    a = t[a ^ w[len - 1]];
+    b = t[b ^ w[len - 1]];
+
+    return (unsigned)b << 8 | a;
 }
 
 static void place(unsigned at)
@@ -572,13 +618,6 @@ static void text_word(const char* word, int len, int topic, int in_title)
 void words_begin(int t)
 {
     if (!slot) {
-        unsigned k;
-        uint32_t v = 1;
-
-        for (k = 0; k < 256; k++) {
-            v = v * 1103515245UL + 12345;       /* once, so the cost is no matter */
-            mix[k] = (uint16_t)(v >> 8);
-        }
         slot_cap = FIRST_SLOTS;
         slot = md_realloc(NULL, slot_cap * (unsigned)sizeof(uint16_t));
     }
@@ -681,6 +720,30 @@ static int rec_after(unsigned a, unsigned b)
 
 #define RADIX_LETTERS 3
 
+static int by_rec(const void* a, const void* b)
+{
+    const uint8_t* p = run + *(const uint16_t*)a;
+    const uint8_t* q = run + *(const uint16_t*)b;
+    int c = memcmp(p + 1, q + 1, p[0] < q[0] ? p[0] : q[0]);
+
+    return c ? c : (int)p[0] - (int)q[0];
+}
+
+/* Two records' words the same in their first RADIX_LETTERS letters, as the
+ * passes see them: a letter past a word's end is 0. */
+static int same_start(const uint8_t* a, const uint8_t* b)
+{
+    unsigned d;
+
+    for (d = 1; d <= RADIX_LETTERS; d++) {
+        if ((a[0] >= d ? a[d] : 0) != (b[0] >= d ? b[d] : 0)) {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
 /* One stable counting pass on each record's letter d, 0 for a word too
  * short to have one -- as a shorter word sorts first. The counts are 16
  * bits, as indexing them is then an add, where 24 bits is a multiply. */
@@ -710,9 +773,9 @@ static void radix_pass(const uint16_t* from, uint16_t* to, unsigned d)
     }
 }
 
-/* The run's records in order: by their first six letters, a stable
- * counting pass each from the sixth back, which is linear; then by
- * inserting, which with them nearly in order is a comparison or so each. */
+/* The run's records in order: by their first letters, a stable counting
+ * pass each from the last back, which is linear; then each group that
+ * shares them. */
 static void sort_run(void)
 {
     uint16_t* from = rec;
@@ -728,15 +791,36 @@ static void sort_run(void)
         from = to;
         to = t;
     }
-    for (i = 1; i < nrec; i++) {
-        uint16_t x = from[i];
-        unsigned j = i;
+    /* Each group that shares the first letters. */
+    for (i = 0; i < nrec;) {
+        const uint8_t* g = run + from[i];
+        unsigned e = i + 1;
 
-        while (j > 0 && rec_after(from[j - 1], x)) {
-            from[j] = from[j - 1];
-            j--;
+        while (e < nrec && same_start(run + from[e], g)) {
+            e++;
         }
-        from[j] = x;
+        {
+            /* Inserted while that costs no more than a few moves each;
+             * past that, merged, so a group is never its size squared. */
+            unsigned k;
+            unsigned moves = 0;
+
+            for (k = i + 1; k < e && moves <= 4 * (e - i); k++) {
+                uint16_t x = from[k];
+                unsigned j = k;
+
+                while (j > i && rec_after(from[j - 1], x)) {
+                    from[j] = from[j - 1];
+                    j--;
+                    moves++;
+                }
+                from[j] = x;
+            }
+            if (k < e) {
+                md_sort(from + i, e - i, (unsigned)sizeof(uint16_t), by_rec);
+            }
+        }
+        i = e;
     }
     if (from != rec) {
         memcpy(rec, from, nrec * sizeof(uint16_t));
@@ -859,6 +943,11 @@ static int make_runs(unsigned long* starts)
     return runs_reread() == 0 ? nruns : -1;
 }
 
+static int by_topic(const void* a, const void* b)
+{
+    return (int)(*(const uint16_t*)a & 0x7FFF) - (int)(*(const uint16_t*)b & 0x7FFF);
+}
+
 /* A word's topics, as numbered now, sorted, each once (in_title if any
  * was). */
 static unsigned tidy(uint16_t* v, unsigned n)
@@ -869,15 +958,25 @@ static unsigned tidy(uint16_t* v, unsigned n)
     for (i = 0; i < n; i++) {
         v[i] = (uint16_t)((unsigned)final_of[v[i] & 0x7FFF] | (v[i] & 0x8000));
     }
-    for (i = 1; i < n; i++) {
-        uint16_t x = v[i];
-        unsigned j = i;
+    /* Nearly in order, as gathered: inserted, while that costs no more
+     * than a few moves each; past that, merged, so never n squared. */
+    {
+        unsigned moves = 0;
 
-        while (j > 0 && (v[j - 1] & 0x7FFF) > (x & 0x7FFF)) {
-            v[j] = v[j - 1];
-            j--;
+        for (i = 1; i < n && moves <= 4 * n; i++) {
+            uint16_t x = v[i];
+            unsigned j = i;
+
+            while (j > 0 && (v[j - 1] & 0x7FFF) > (x & 0x7FFF)) {
+                v[j] = v[j - 1];
+                j--;
+                moves++;
+            }
+            v[j] = x;
         }
-        v[j] = x;
+        if (i < n) {
+            md_sort(v, n, (unsigned)sizeof(uint16_t), by_topic);
+        }
     }
     for (i = 0; i < n; i++) {
         if (o && (v[o - 1] & 0x7FFF) == (v[i] & 0x7FFF)) {
@@ -958,8 +1057,10 @@ int write_words(void (*emit)(const void* p, unsigned n))
 
     /* Merged: the least word of the runs' current records, from each run
      * that has it, its topics gathered; then written. live holds the runs
-     * not yet done, and first each one's current word's first two
-     * letters, which settle most comparisons. */
+     * not yet done -- at most MAX_RUNS, so looking at each for every word
+     * is a constant a word -- and first each one's current word's first
+     * two letters, which settle most comparisons. Gathered in the runs'
+     * order, a word's topics come nearly in order, as tidy wants them. */
     live = md_realloc(NULL, (unsigned)(nruns + 1) * (unsigned)sizeof(window*));
     nlive = 0;
     for (r = 0; r < nruns; r++) {
@@ -988,12 +1089,11 @@ int write_words(void (*emit)(const void* p, unsigned n))
         eq[neq++] = 0;
         for (k = 1; k < nlive; k++) {
             window* w = live[k];
-            window* l = least;
-            int c = w->first < l->first ? -1 : w->first > l->first ? 1
-                    : key_cmp(w->buf + w->at, l->buf + l->at);
+            int c = w->first < least->first ? -1 : w->first > least->first ? 1
+                    : key_cmp(w->buf + w->at, least->buf + least->at);
 
             if (c < 0) {
-                least = live[k];
+                least = w;
                 neq = 0;
                 eq[neq++] = k;
             } else if (c == 0) {
@@ -1018,10 +1118,11 @@ int write_words(void (*emit)(const void* p, unsigned n))
             w->first = ready(w) ? first_of(w) : 0;
         }
         /* The runs that are done, out of live: from the back, so the
-         * indexes in eq still hold. */
+         * indexes in eq still hold -- the order of the rest kept. */
         for (j = neq; j-- > 0;) {
             if (!ready(live[eq[j]])) {
-                live[eq[j]] = live[--nlive];
+                nlive--;
+                memmove(live + eq[j], live + eq[j] + 1, (nlive - eq[j]) * sizeof(window*));
             }
         }
         n = tidy(v, n);

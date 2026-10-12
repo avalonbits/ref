@@ -360,7 +360,8 @@ static int read_page(int pi)
     int n;
     int got;
     int cur = -1;               /* the topic being read */
-    int seen = 0;               /* its blocks looked at */
+    int first = 0;              /* its first block */
+    int seen = 0;               /* the blocks looked at */
     int any = 0;                /* a block yet on this page */
 
     if (page_open(pi) != 0) {
@@ -383,13 +384,11 @@ static int read_page(int pi)
                 int next;
 
                 if (cur >= 0) {
-                    render_topic(cur, p->blocks, seen);
+                    render_topic(cur, p->blocks + first, seen - first);
                 }
-                memmove(p->blocks, p->blocks + seen, (unsigned)(p->nblocks - seen) * sizeof(block));
-                p->nblocks -= seen;
-                seen = 0;
+                first = seen;           /* moved down once a run, not at each topic */
                 done_some = 1;
-                next = book_heading(pi, &p->blocks[0]);
+                next = book_heading(pi, &p->blocks[seen]);
                 if (next < 0) {
                     page_close();
 
@@ -403,6 +402,10 @@ static int read_page(int pi)
             }
         }
         if (done_some) {
+            memmove(p->blocks, p->blocks + first, (unsigned)(p->nblocks - first) * sizeof(block));
+            p->nblocks -= first;
+            seen -= first;
+            first = 0;
             keep_blocks(p->blocks, p->nblocks);
         }
     }

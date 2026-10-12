@@ -64,6 +64,13 @@ out/host/md2ref: $(MD2REF_SRC) $(MD2REF_HDR)
 	$(CC) -std=c99 -Wall -Wextra -Wno-unused-parameter -Werror -fsigned-char -O1 -g $(SAN) \
 		-Isrc/core $(MD2REF_SRC) -o $@
 
+# Without the sanitizers, for valgrind: test/growth.sh counts the
+# instructions it runs.
+out/host/md2ref-plain: $(MD2REF_SRC) $(MD2REF_HDR)
+	@mkdir -p out/host
+	$(CC) -std=c99 -Wall -Wextra -Wno-unused-parameter -Werror -fsigned-char -O1 -g \
+		-Isrc/core $(MD2REF_SRC) -o $@
+
 out/host/reftool: $(CORE_SRC) $(CORE_HDR) test/host/reftool.c
 	@mkdir -p out/host
 	$(CC) -std=c99 -Wall -Wextra -Wno-unused-parameter -Werror -fsigned-char -O1 -g $(SAN) \

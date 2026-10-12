@@ -287,7 +287,6 @@ int page_next(line** lines, int* n)
     }
 
     /* Where the run ends, read into the window as far as it needs. */
-scan:
     r = 0;
     fenced = 0;
     was_blank = 0;
@@ -304,7 +303,7 @@ scan:
 
                 return -1;
             }
-            goto scan;
+            continue;               /* the same line again: r is from beg, which fill keeps */
         }
         if (e == -1) {
             break;
@@ -445,6 +444,14 @@ static int before(const char* a, const char* b)
     return strcmp(a, b) < 0;
 }
 
+static int by_page(const void* a, const void* b)
+{
+    const char* x = *(char* const*)a;
+    const char* y = *(char* const*)b;
+
+    return before(x, y) ? -1 : before(y, x) ? 1 : 0;
+}
+
 static int is_dir(const char* path)
 {
     return !ends_md(path);
@@ -453,7 +460,6 @@ static int is_dir(const char* path)
 int read_pages(int nargs, char** args)
 {
     int i;
-    int j;
 
     pages = arena_alloc(MAX_PAGES * sizeof(page));
     if (nargs == 1 && is_dir(args[0])) {
@@ -462,14 +468,7 @@ int read_pages(int nargs, char** args)
 
             return -1;
         }
-        for (i = 1; i < nfound; i++) {
-            char* x = found[i];
-
-            for (j = i; j > 0 && before(x, found[j - 1]); j--) {
-                found[j] = found[j - 1];
-            }
-            found[j] = x;
-        }
+        md_sort(found, (unsigned)nfound, (unsigned)sizeof(char*), by_page);
         if (nfound == 0) {
             md_error(args[0], 0, "has no .md pages");
 

@@ -340,6 +340,66 @@ static void emit_styled(const cell* c, int from, int to, int force_em)
     }
 }
 
+/* The columns' widths narrowed to fit room, as narrowing the widest that
+ * can still give, a character at a time, would leave them -- the first of
+ * those as wide when they tie -- but found directly: the level h such that
+ * every column at most h + 1 (and none under its minimum) is too wide and
+ * at most h is not, then as many as it takes of those at h + 1 to h, the
+ * first first. A binary search for h, where a character at a time was
+ * the excess times the columns. */
+static int capped(const int* w, const int* min, int n, int h)
+{
+    int total = 0;
+    int c;
+
+    for (c = 0; c < n; c++) {
+        total += w[c] < h ? w[c] : min[c] > h ? min[c] : h;
+    }
+
+    return total;
+}
+
+static void fit_widths(int* w, const int* min, int n, int room)
+{
+    int lo = 0;
+    int hi = 0;
+    int excess;
+    int c;
+
+    for (c = 0; c < n; c++) {
+        hi = w[c] > hi ? w[c] : hi;
+    }
+    if (capped(w, min, n, hi) <= room) {
+        return;                             /* it fits as it is */
+    }
+    if (capped(w, min, n, 0) > room) {
+        for (c = 0; c < n; c++) {
+            w[c] = min[c];                  /* it never fits: all as narrow as they go */
+        }
+
+        return;
+    }
+    while (lo + 1 < hi) {                   /* capped(lo) fits, capped(hi) does not */
+        int mid = lo + (int)((unsigned)(hi - lo) >> 1);
+
+        if (capped(w, min, n, mid) <= room) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    excess = capped(w, min, n, lo + 1) - room;
+    for (c = 0; c < n; c++) {
+        int was = w[c];
+
+        w[c] = was < lo + 1 ? was : min[c] > lo + 1 ? min[c] : lo + 1;
+        if (excess > 0 && w[c] == lo + 1 && min[c] <= lo) {
+            w[c] = lo;
+            excess--;
+        }
+    }
+}
+
 static void table(const page* p, const block* b)
 {
     static const char* cells[MAX_COLS];
@@ -356,7 +416,6 @@ static void table(const page* p, const block* b)
     cell* grid;
     int r;
     int c;
-    int room;
     int wrapped = 0;
 
     for (r = 0; s[r]; r++) {
@@ -402,22 +461,7 @@ static void table(const page* p, const block* b)
         }
         widths[c] = natural[c];
     }
-    room = TABLE_WIDTH - 3 * (ncols - 1);
-    for (;;) {
-        int total = 0;
-        int k = -1;
-
-        for (c = 0; c < ncols; c++) {
-            total += widths[c];
-            if (widths[c] > minimum[c] && (k < 0 || widths[c] > widths[k])) {
-                k = c;
-            }
-        }
-        if (total <= room || k < 0) {
-            break;
-        }
-        widths[k]--;
-    }
+    fit_widths(widths, minimum, ncols, TABLE_WIDTH - 3 * (ncols - 1));
 
     /* Any body row wrapped? Then rows are ruled apart. */
     for (r = 1; r < nrows; r++) {

@@ -13,6 +13,7 @@
  * first was not the only one.
  */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "md2ref.h"
@@ -52,14 +53,59 @@ static id_set* ids;
 static int nids;
 static int max_ids;
 
-static void add_anchor(int page, const char* name, int t)
+/* The anchors by page and name, through a hash: each anchor added and
+ * each link resolved looks at the few that share its hash, not at all of
+ * them. Slots hold an anchor's index + 1, 0 for none; there are always at
+ * least twice as many as anchors. */
+static int* anchor_slot;
+static unsigned anchor_slots;               /* a power of two */
+
+static unsigned anchor_hash(int page, const char* name)
+{
+    return md_hash((unsigned)page, name, (unsigned)strlen(name));
+}
+
+/* The anchor's slot: where it is, or the empty slot it would go in. */
+static unsigned anchor_find(int page, const char* name)
+{
+    unsigned mask = anchor_slots - 1;
+    unsigned h = anchor_hash(page, name) & mask;
+
+    while (anchor_slot[h]) {
+        const anchor* a = &anchors[anchor_slot[h] - 1];
+
+        if (a->page == page && strcmp(a->name, name) == 0) {
+            break;
+        }
+        h = (h + 1) & mask;
+    }
+
+    return h;
+}
+
+static void more_anchor_slots(void)
 {
     int k;
 
+    anchor_slots = anchor_slots ? anchor_slots * 2 : 512;
+    free(anchor_slot);
+    anchor_slot = md_realloc(NULL, anchor_slots * (unsigned)sizeof(int));
+    memset(anchor_slot, 0, anchor_slots * sizeof(int));
     for (k = 0; k < nanchors; k++) {
-        if (anchors[k].page == page && strcmp(anchors[k].name, name) == 0) {
-            return;                         /* the first keeps it */
-        }
+        anchor_slot[anchor_find(anchors[k].page, anchors[k].name)] = k + 1;
+    }
+}
+
+static void add_anchor(int page, const char* name, int t)
+{
+    unsigned h;
+
+    if ((unsigned)(nanchors + 1) * 2 > anchor_slots) {
+        more_anchor_slots();
+    }
+    h = anchor_find(page, name);
+    if (anchor_slot[h]) {
+        return;                             /* the first keeps it */
     }
     if (nanchors == max_anchors) {
         max_anchors = max_anchors ? max_anchors * 2 : 256;
@@ -69,19 +115,12 @@ static void add_anchor(int page, const char* name, int t)
     anchors[nanchors].name = name;
     anchors[nanchors].topic = t;
     nanchors++;
+    anchor_slot[h] = nanchors;
 }
 
 static int has_anchor(int page, const char* name)
 {
-    int k;
-
-    for (k = 0; k < nanchors; k++) {
-        if (anchors[k].page == page && strcmp(anchors[k].name, name) == 0) {
-            return 1;
-        }
-    }
-
-    return 0;
+    return anchor_slots && anchor_slot[anchor_find(page, name)] != 0;
 }
 
 /* Python-Markdown's toc slug: word characters, spaces and hyphens kept,
@@ -253,10 +292,10 @@ static int make_top(int pi)
     }
     memmove(&topics[f + 1], &topics[f], (unsigned)(ntopics - f) * sizeof(topic));
     ntopics++;
-    for (k = 0; k < ntopics; k++) {
-        if (k == f) {
-            continue;
-        }
+    /* Only the page's topics move, and only they refer to one another:
+     * those before refer to earlier topics but for the root before the
+     * page's, whose next is f -- the new top now, as it should be. */
+    for (k = f + 1; k < ntopics; k++) {
         shift(&topics[k].parent, f);
         shift(&topics[k].first_child, f);
         shift(&topics[k].last_child, f);
@@ -265,12 +304,6 @@ static int make_top(int pi)
     for (k = 0; k < nids; k++) {
         if (ids[k].topic >= f) {
             ids[k].topic++;
-        }
-    }
-    /* The root before the page's leads to the new top, not its heading. */
-    for (k = 0; k < f; k++) {
-        if (topics[k].next == f + 1) {
-            topics[k].next = f;
         }
     }
     memset(&topics[f], 0, sizeof(topic));
@@ -449,13 +482,11 @@ static int anchor_topic(int pi, const char* frag)
     if (!frag || !*frag) {
         return pages[pi].first_topic;
     }
-    for (k = 0; k < nanchors; k++) {
-        if (anchors[k].page == pi && strcmp(anchors[k].name, frag) == 0) {
-            return anchors[k].topic;
-        }
+    if (!anchor_slots || !(k = anchor_slot[anchor_find(pi, frag)])) {
+        return -1;
     }
 
-    return -1;
+    return anchors[k - 1].topic;
 }
 
 static void unresolved(const char* file, int no, const char* href, int len)

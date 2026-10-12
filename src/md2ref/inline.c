@@ -194,16 +194,257 @@ static int run_of(const char* s, int k, int n, char c)
     return r;
 }
 
+/* --- an index of the text ---------------------------------------------------- */
+
+/* What the scans below would otherwise look for again from every opener:
+ * the text's backtick runs, by length and position; and which ] closes
+ * each [, and which ) each (, as the scans pair them. So a scan is a
+ * binary search, not the rest of the text -- each [, * and ` that never
+ * closes was a scan to the end, and a block of them the block squared. */
+typedef struct {
+    uint16_t len;
+    uint16_t pos;
+} tick_run;
+
+#define NO_PAIR 0xFFFF
+
+static const char* ix_base;         /* the text indexed */
+static int ix_n;
+static const char* ix_text;         /* the text to index, should the scans need it */
+static int ix_text_n;
+static long scan_left;              /* bytes the scans may yet look at before it is indexed */
+static tick_run* ticks;             /* by length, then position */
+static int nticks;
+static uint16_t* br_open;           /* each [ in order, and its ] or NO_PAIR */
+static uint16_t* br_close;
+static int nbr;
+static uint16_t* par_open;          /* each ( in order, and its ) or NO_PAIR */
+static uint16_t* par_close;
+static int npar;
+static uint16_t* stack;
+static int ticks_cap;               /* each grown as the text has more, not to its length */
+static int br_cap;
+static int par_cap;
+
+static int closing_ticks(const char* s, int k, int n, int r);
+
+static int by_tick(const void* a, const void* b)
+{
+    const tick_run* x = a;
+    const tick_run* y = b;
+
+    return x->len != y->len ? (int)x->len - (int)y->len : (int)x->pos - (int)y->pos;
+}
+
+/* The ordinal of the pair whose opener is at pos, in open[0..n), or -1. */
+static int pair_of(const uint16_t* open, int n, unsigned pos)
+{
+    int lo = 0;
+    int hi = n;
+
+    while (lo < hi) {
+        int mid = lo + (int)((unsigned)(hi - lo) >> 1);
+
+        if (open[mid] < pos) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+
+    return lo < n && open[lo] == pos ? lo : -1;
+}
+
+static uint8_t ix_kind[256];
+static uint16_t* pstack;
+
+/* A ( or ) at j, into the parens' pairs. */
+static void paren(char c, int j, int* depth)
+{
+    if (c == '(') {
+        if (npar == par_cap) {
+            par_cap = par_cap ? par_cap * 2 : 32;
+            par_open = md_realloc(par_open, (unsigned)par_cap * (unsigned)sizeof(uint16_t));
+            par_close = md_realloc(par_close, (unsigned)par_cap * (unsigned)sizeof(uint16_t));
+            pstack = md_realloc(pstack, (unsigned)par_cap * (unsigned)sizeof(uint16_t));
+        }
+        par_open[npar] = (uint16_t)j;
+        par_close[npar] = NO_PAIR;
+        pstack[(*depth)++] = (uint16_t)npar++;
+    } else if (c == ')' && *depth > 0) {
+        par_close[pstack[--*depth]] = (uint16_t)j;
+    }
+}
+
+static void index_text(const char* s, int n)
+{
+    int depth = 0;
+    int pdepth = 0;
+    int j;
+
+    ix_base = NULL;                 /* closing_ticks scans while it is built */
+    if (n > 0xFFFE) {
+        return;                     /* too long to index: scanned as before */
+    }
+    nticks = nbr = npar = 0;
+    for (j = 0; j < n;) {               /* the backtick runs, found by memchr: the eZ80's cpir */
+        const char* t = memchr(s + j, '`', (size_t)(n - j));
+        int r;
+
+        if (!t) {
+            break;
+        }
+        j = (int)(t - s);
+        r = run_of(s, j, n, '`');
+        if (nticks == ticks_cap) {
+            ticks_cap = ticks_cap ? ticks_cap * 2 : 32;
+            ticks = md_realloc(ticks, (unsigned)ticks_cap * (unsigned)sizeof(tick_run));
+        }
+        ticks[nticks].len = (uint16_t)r;
+        ticks[nticks++].pos = (uint16_t)j;
+        j += r;
+    }
+    if (nticks > 16) {
+        md_sort(ticks, (unsigned)nticks, (unsigned)sizeof(tick_run), by_tick);
+    } else {
+        int i;
+
+        for (i = 1; i < nticks; i++) {  /* few: in place, by length, positions kept in order */
+            tick_run x = ticks[i];
+            int k = i;
+
+            while (k > 0 && ticks[k - 1].len > x.len) {
+                ticks[k] = ticks[k - 1];
+                k--;
+            }
+            ticks[k] = x;
+        }
+    }
+    ix_base = s;
+    ix_n = n;
+
+    /* [ and ] paired as link_at's scan pairs them -- past a backslash's
+     * byte, and past a code span from the backticks it meets -- and ( and
+     * ) as its second scan does, every one counting: in one pass, the
+     * bytes that are none of these passed over by table. */
+    if (!ix_kind['[']) {
+        ix_kind['\\'] = 1;
+        ix_kind['`'] = 2;
+        ix_kind['['] = 3;
+        ix_kind[']'] = 4;
+        ix_kind['('] = 5;
+        ix_kind[')'] = 6;
+    }
+    for (j = 0; j < n;) {
+        int r;
+        int c;
+
+        switch (ix_kind[(uint8_t)s[j]]) {
+        case 0:
+            j++;
+            break;
+        case 1:                         /* the next byte is no bracket, but may be a ( */
+            if (j + 1 < n) {
+                paren(s[j + 1], j + 1, &pdepth);
+            }
+            j += 2;
+            break;
+        case 2:
+            r = run_of(s, j, n, '`');
+            c = closing_ticks(s, j + r, n, r);
+            if (c >= 0) {
+                int k;
+
+                for (k = j + r; k < c; k++) {   /* a code span: its ( and ) still count */
+                    paren(s[k], k, &pdepth);
+                }
+                j = c + r;
+            } else {
+                j++;
+            }
+            break;
+        case 3:
+            if (nbr == br_cap) {
+                br_cap = br_cap ? br_cap * 2 : 32;
+                br_open = md_realloc(br_open, (unsigned)br_cap * (unsigned)sizeof(uint16_t));
+                br_close = md_realloc(br_close, (unsigned)br_cap * (unsigned)sizeof(uint16_t));
+                stack = md_realloc(stack, (unsigned)br_cap * (unsigned)sizeof(uint16_t));
+            }
+            br_open[nbr] = (uint16_t)j;
+            br_close[nbr] = NO_PAIR;
+            stack[depth++] = (uint16_t)nbr++;
+            j++;
+            break;
+        case 4:
+            if (depth > 0) {
+                br_close[stack[--depth]] = (uint16_t)j;
+            }
+            j++;
+            break;
+        default:
+            paren(s[j], j, &pdepth);
+            j++;
+            break;
+        }
+    }
+}
+
+/* Where s is in the indexed text, or -1 if it is not, when the scans
+ * should go there. They scan the text as it is -- a link's ] is a few
+ * bytes on, and indexing a block costs more than finding it -- until they
+ * have looked at twice the text, which only opener after opener that
+ * never closes makes them do; then the text is indexed, and they look
+ * there. So a block costs at most twice itself and its index. */
+static long indexed_at(const char* s, int n)
+{
+    if (ix_text && scan_left < 0) {
+        const char* t = ix_text;
+
+        ix_text = NULL;
+        index_text(t, ix_text_n);
+    }
+
+    return ix_base && s >= ix_base && s + n <= ix_base + ix_n ? (long)(s - ix_base) : -1;
+}
+
 /* The next run of exactly r backticks from k, or -1. */
 static int closing_ticks(const char* s, int k, int n, int r)
 {
-    while (k < n) {
-        int run = run_of(s, k, n, '`');
+    long at = indexed_at(s, n);
 
-        if (run == r) {
-            return k;
+    if (at >= 0) {
+        unsigned from = (unsigned)(at + k);
+        int lo = 0;
+        int hi = nticks;
+
+        while (lo < hi) {               /* the first run of r at or after from */
+            int mid = lo + (int)((unsigned)(hi - lo) >> 1);
+
+            if (ticks[mid].len < r || (ticks[mid].len == r && ticks[mid].pos < from)) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
         }
-        k += run ? run : 1;
+        if (lo < nticks && ticks[lo].len == r && ticks[lo].pos < at + n) {
+            return (int)(ticks[lo].pos - at);
+        }
+
+        return -1;
+    }
+    {
+        int from = k;
+
+        while (k < n) {
+            int run = run_of(s, k, n, '`');
+
+            if (run == r) {
+                scan_left -= k - from;
+                return k;
+            }
+            k += run ? run : 1;
+        }
+        scan_left -= k - from;
     }
 
     return -1;
@@ -214,7 +455,28 @@ static int link_at(const char* s, int k, int n, int* label_end, int* href, int* 
 {
     int depth = 0;
     int j;
+    long at = indexed_at(s, n);
 
+    if (at >= 0) {
+        int b = pair_of(br_open, nbr, (unsigned)(at + k));
+        int c;
+
+        if (b < 0 || br_close[b] == NO_PAIR || br_close[b] >= at + n) {
+            return 0;
+        }
+        j = (int)(br_close[b] - at);
+        if (j + 1 >= n || s[j + 1] != '(') {
+            return 0;
+        }
+        c = pair_of(par_open, npar, (unsigned)(at + j + 1));
+        if (c < 0 || par_close[c] == NO_PAIR || par_close[c] >= at + n) {
+            return 0;
+        }
+        *label_end = j;
+        k = j + 2;
+        j = (int)(par_close[c] - at);
+        goto href;
+    }
     for (j = k; j < n; j++) {
         if (s[j] == '\\') {
             j++;
@@ -235,6 +497,7 @@ static int link_at(const char* s, int k, int n, int* label_end, int* href, int* 
             break;
         }
     }
+    scan_left -= (j < n ? j : n) - k;
     if (j >= n || j + 1 >= n || s[j + 1] != '(') {
         return 0;
     }
@@ -248,9 +511,11 @@ static int link_at(const char* s, int k, int n, int* label_end, int* href, int* 
             break;
         }
     }
+    scan_left -= (j < n ? j : n) - k;
     if (j >= n) {
         return 0;
     }
+href:
     *end = j + 1;
     while (k < j && s[k] == ' ') {
         k++;
@@ -271,6 +536,14 @@ static int link_at(const char* s, int k, int n, int* label_end, int* href, int* 
  * length, or 0. A run of one to three opens, before a non-space; it closes
  * at a run as long after a non-space. An underscore inside a word does
  * neither. */
+/* How deep inlines is in itself, and for each depth where an emphasis
+ * of each kind (* or _, and its length) was looked for to the end without
+ * a close: from there on there is none, in that text. */
+#define INLINE_DEPTH 16
+
+static int inline_depth;
+static int emph_fail[INLINE_DEPTH + 1][2][4];
+
 static int emphasis_at(const char* s, int k, int n, int* inner_end, int* width)
 {
     char c = s[k];
@@ -279,6 +552,9 @@ static int emphasis_at(const char* s, int k, int n, int* inner_end, int* width)
 
     if (r > 3 || k + r >= n || s[k + r] == ' ' || s[k + r] == '\n') {
         return 0;
+    }
+    if (k >= emph_fail[inline_depth][c == '_'][r]) {
+        return 0;                       /* no close after an earlier one: none after this */
     }
     if (c == '_' && k > 0 && ((s[k - 1] >= 'a' && s[k - 1] <= 'z') || (s[k - 1] >= 'A' && s[k - 1] <= 'Z')
                              || (s[k - 1] >= '0' && s[k - 1] <= '9'))) {
@@ -315,6 +591,7 @@ static int emphasis_at(const char* s, int k, int n, int* inner_end, int* width)
             j += run - 1;
         }
     }
+    emph_fail[inline_depth][c == '_'][r] = k;
 
     return 0;
 }
@@ -380,7 +657,32 @@ static void link(const char* s, int k, int label_end, int href, int href_len, in
     }
 }
 
+static void inlines_at(const char* s, int n, int in_link);
+
+/* Inline Markdown at a depth of its own -- an emphasis's or a link's text
+ * is inlines again -- to INLINE_DEPTH, past which it is put as it is. */
 static void inlines(const char* s, int n, int in_link)
+{
+    int c;
+
+    if (inline_depth >= INLINE_DEPTH) {
+        put_text(s, n);
+
+        return;
+    }
+    inline_depth++;
+    for (c = 0; c < 2; c++) {
+        int r;
+
+        for (r = 0; r < 4; r++) {
+            emph_fail[inline_depth][c][r] = n;
+        }
+    }
+    inlines_at(s, n, in_link);
+    inline_depth--;
+}
+
+static void inlines_at(const char* s, int n, int in_link)
 {
     int k = 0;
 
@@ -483,7 +785,12 @@ int inline_markup(const page* p, int no, const char* s, uint8_t* o, int size, li
     cur_page = p;
     cur_no = no;
     resolve = links;
-    inlines(s, (int)strlen(s), 0);
+    ix_base = NULL;
+    ix_text = s;
+    ix_text_n = (int)strlen(s);
+    scan_left = 2L * ix_text_n + 256;
+    inlines(s, ix_text_n, 0);
+    ix_base = ix_text = NULL;
     /* No space to end with. */
     if (written > 0 && written <= room && out[written - 1] == ' ') {
         written--;
@@ -527,11 +834,17 @@ void inline_plain(const char* s, char* o, int size)
     o[j] = 0;
 }
 
-int inline_code(const char* s, int i, char* o, int size)
+int inline_code(const char* s, int* at, char* o, int size)
 {
     int n = (int)strlen(s);
-    int k = 0;
+    int k = *at;
 
+    if (*at == 0 || (ix_base != s && ix_text != s)) {
+        ix_base = NULL;                 /* afresh for each string, when first needed */
+        ix_text = s;
+        ix_text_n = n;
+        scan_left = 2L * n + 256;
+    }
     while (k < n) {
         if (s[k] == '\\') {
             k += 2;
@@ -542,26 +855,24 @@ int inline_code(const char* s, int i, char* o, int size)
             int close = closing_ticks(s, k + r, n, r);
 
             if (close >= 0) {
-                if (i-- == 0) {
-                    int a = k + r;
-                    int len = close - a;
+                int a = k + r;
+                int len = close - a;
 
-                    if (len >= size) {
-                        len = size - 1;
-                    }
-                    memcpy(o, s + a, (size_t)len);
-                    o[len] = 0;
-
-                    return 1;
+                if (len >= size) {
+                    len = size - 1;
                 }
-                k = close + r;
-                continue;
+                memcpy(o, s + a, (size_t)len);
+                o[len] = 0;
+                *at = close + r;
+
+                return 1;
             }
             k += r;
             continue;
         }
         k++;
     }
+    *at = k;
 
     return 0;
 }

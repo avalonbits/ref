@@ -18,13 +18,18 @@
 ;                     unsigned *pcand)
 ;
 ; From *pi on -- and *pi + 4 <= n, which the caller sees to -- until a
-; position whose table entry starts a match of 4 bytes or more: its length,
-; the position in *pi and the match's start + 1 in *pcand. 0 when none
-; does before the last four bytes, with *pi the first position past them.
+; position whose table entry starts with the same 4 bytes: 4, the position
+; in *pi and the earlier one + 1 in *pcand. 0 when none does before the
+; last four bytes, with *pi the first position past them.
+;
+;   unsigned lz4_extend(const uint8_t *a, const uint8_t *b, unsigned max)
+;
+; How many bytes from a and b are the same, to max: lz4w.c's extend.
 
 	.assume adl=1
 	.section .text,"ax",@progbits
 	.global _lz4_scan
+	.global _lz4_extend
 
 T_PAGE	.equ	_lz4_tab
 R_PAGE	.equ	_lz4_tab + 256
@@ -186,51 +191,13 @@ none:
 	jr out
 
 found:					; HL is the match's start + 3
-	push hl
 	ld de, (src)
 	or a, a
 	sbc hl, de
 	dec hl
 	dec hl
 	ld (cand), hl			; its start + 1
-	ld hl, (vstop)			; the bytes after these four: n - i - 4
-	push ix
-	pop de
-	or a, a
-	sbc hl, de
-	dec hl
-	push hl
-	pop bc
-	pop hl
-	inc hl				; the match's start + 4
-	lea de, iy+4			; p + 4
-	ld a, b
-	or a, c				; BC is under 65536: n is
-	jr nz, more
-	ld hl, 4			; no more bytes: just the four
-	jr report
-
-more:
-	ld a, (de)
-	inc de
-	cpi
-	jr nz, differ
-	jp pe, more
-equal_all:				; every byte to the end matched
-	ex de, hl
-	lea de, iy+4
-	or a, a
-	sbc hl, de
-	ld de, 4
-	add hl, de
-	jr report
-differ:					; DE is one past the byte that differs
-	ex de, hl
-	lea de, iy+5
-	or a, a
-	sbc hl, de
-	ld de, 4
-	add hl, de
+	ld hl, 4			; the four: lz4_extend takes it on
 
 report:					; HL the length
 	push hl
@@ -265,6 +232,38 @@ out:					; HL 0, v at vstop: i = n - 3
 done:
 	ld sp, ix
 	ld iy, (ix-3)
+	pop ix
+	ret
+
+_lz4_extend:
+	push ix
+	ld ix, 0
+	add ix, sp
+	ld hl, (ix+6)			; a
+	ld de, (ix+9)			; b
+	ld bc, (ix+12)			; max: under 65536, a topic's most
+	ld a, b
+	or a, c
+	jr z, ext_none
+ext_more:
+	ld a, (de)
+	inc de
+	cpi				; A against (HL), HL on, BC down
+	jr nz, ext_differ
+	jp pe, ext_more
+	ld hl, (ix+12)			; all max the same
+	pop ix
+	ret
+ext_differ:				; DE is one past the byte that differs
+	ex de, hl
+	ld de, (ix+9)
+	or a, a
+	sbc hl, de
+	dec hl
+	pop ix
+	ret
+ext_none:
+	ld hl, 0
 	pop ix
 	ret
 

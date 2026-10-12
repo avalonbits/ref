@@ -6,6 +6,7 @@ reader core, as ref on the Agon reads them.
 """
 
 import glob
+import hashlib
 import os
 import shutil
 import struct
@@ -441,6 +442,38 @@ class Md2ref(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stdout)
         self.assertIn(b'x*y z\x0bw v[Image: pic] u \x10em\x11 s \x10st\x11 r\x12c\x13 q',
                       b''.join(views(data)))
+
+    def test_table_columns_narrowed_as_before(self):
+        # Columns too wide for the screen are narrowed as narrowing the
+        # widest that can still give, a character at a time, left them --
+        # the first of those tied -- though now found directly. These are
+        # md5s of each table's view as that loop rendered it.
+        tables = {
+            'wide': ('| a | b | c |\n|---|---|---|\n| ' + ' | '.join(
+                ['word ' * 30, 'x', 'longer words here ' * 10]) + ' |\n',
+                '0b5341ca5053af303752c8cdb485bab2'),
+            'ties': ('| a | b | c | d |\n|---|---|---|---|\n| ' + ' | '.join(['abcdefghij ' * 5] * 4)
+                     + ' |\n', '224858946b07674a8b57f736699afc52'),
+            'mins': ('| a | b | c |\n|---|---|---|\n| supercalifragilistic expialidocious | '
+                     + 'short ' * 20 + ' | ' + 'antidisestablishmentarianism ' * 3 + ' |\n',
+                     '7baf324e18a018f85eec09749077bf7a'),
+            'many': ('| ' + ' | '.join('h%d' % c for c in range(12)) + ' |\n|' + '---|' * 12 + '\n| '
+                     + ' | '.join(('w%d ' % c) * (c + 3) for c in range(12)) + ' |\n',
+                     '63fdedb9bdc1e5003234409f9413031b'),
+            'fits': ('| a | b |\n|---|---|\n| one | two |\n', 'ec69949bf2b6c53905a451a0e221324a'),
+            'allmin': ('| a | b | c |\n|---|---|---|\n| ' + ' | '.join(
+                ['pneumonoultramicroscopicsilicovolcanoconiosis'] * 3) + ' |\n',
+                'd745c6ddba32f472b90add1de9db95e6'),
+        }
+        for name, (table, want) in tables.items():
+            with self.subTest(table=name):
+                p, data, left = compile_pages({'index.md': '# T\n\n' + table})
+                self.assertEqual(p.returncode, 0, p.stdout)
+                with tempfile.NamedTemporaryFile(suffix='.dat') as f:
+                    f.write(data)
+                    f.flush()
+                    raw = subprocess.run([TOOL, f.name, 'views'], capture_output=True, check=True).stdout
+                self.assertEqual(hashlib.md5(raw).hexdigest(), want)
 
     def test_words_past_one_run(self):
         # More words than one 16 KB run of the words file holds: sorted in

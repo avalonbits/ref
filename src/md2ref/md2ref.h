@@ -50,6 +50,17 @@
 /* realloc, or md2ref stops there, saying it is out of memory. */
 void* md_realloc(void* p, unsigned n);
 
+/* A 16-bit hash of n bytes of s, seed mixed in, for the tables that find a
+ * name or a word again (hash.c): Pearson's, by the table md_pearson, so
+ * names that differ only at their end -- one heading's anchor and the next
+ * -- land far apart. */
+extern const uint8_t md_pearson[256];
+unsigned md_hash(unsigned seed, const char* s, unsigned n);
+
+/* n items of size bytes sorted by cmp, those cmp says are the same kept
+ * in their order (sort.c): n log n at worst, where qsort can be n squared. */
+void md_sort(void* base, unsigned n, unsigned size, int (*cmp)(const void* a, const void* b));
+
 /* The book's arena: the outline, which lasts. */
 void* arena_alloc(unsigned n);
 char* arena_strndup(const char* s, unsigned n);
@@ -169,8 +180,9 @@ typedef int (*link_fn)(const page* p, int no, const char* href, int len);
 int inline_markup(const page* p, int no, const char* s, uint8_t* out, int room, link_fn links);
 /* The plain text of inline Markdown, as a reader sees it, into out. */
 void inline_plain(const char* s, char* out, int size);
-/* The code spans of inline Markdown, in turn: the i-th into out, or 0. */
-int inline_code(const char* s, int i, char* out, int size);
+/* The code spans of inline Markdown, in turn: the next from *at into out,
+ * *at moved past it; or 0. */
+int inline_code(const char* s, int* at, char* out, int size);
 
 /* --- the book ---------------------------------------------------------------------- */
 
