@@ -179,6 +179,23 @@ check "a heading that wraps is two lines" "$(dump "$t" heading | sed -n 2p | gre
 check "  the cursor on its first lights both" "$(grep '^lit heading:' <<< "$t")" "lit heading: 0 1"
 check "  and on its second" "$(grep '^lit second:' <<< "$t")" "lit second: 0 1"
 check "  and off the heading, nothing stays lit" "$(grep '^lit off:' <<< "$t")" "lit off:"
+# The FAQ's list of questions: links that wrap are lit whole, too.
+keys="end"; for i in $(seq 8); do keys="$keys
+ctrl+left"; done
+t=$(scripted "ref -k frequently" "$keys
+dump:wrapped
+down
+dump:tail
+down
+dump:next
+up
+ctrl+left
+dump:prev")
+check "a link that wraps is lit on both its lines" "$(grep '^lit wrapped:' <<< "$t")" "lit wrapped: 12 13"
+check "  from its second line too" "$(grep '^lit tail:' <<< "$t")" "lit tail: 12 13"
+check "  and the next is lit whole when the cursor gets to it" "$(grep '^lit next:' <<< "$t")" "lit next: 14 15"
+check "  Ctrl+Left from a second line goes to the link before, not its own start" \
+      "$(grep '^lit prev:' <<< "$t")" "lit prev: 11"
 t=$(scripted "ref -k vdu 23 27 3" "dump:one")
 check "the blank line after a lit heading is not lit" "$(grep '^lit one:' <<< "$t")" "lit one: 0"
 

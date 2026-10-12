@@ -155,6 +155,27 @@ static int link_at(int i, int col, uint16_t* target, int* from, int* to)
     return 1;
 }
 
+/* The column of the last link to target that opens on line i: the one a
+ * link wrapped onto the next line started with. */
+static int last_opening(int i, uint16_t target)
+{
+    const ref_line* ln = &lines[i];
+    const uint8_t* t = book.view;
+    unsigned k;
+    int x = ln->x;
+    int at = ln->x;
+
+    for (k = ln->start; k < ln->end; k = REF_SKIP(t, k)) {
+        if (t[k] == REF_LINK && (uint16_t)(t[k + 1] | t[k + 2] << 8) == target) {
+            at = x;
+        } else if (t[k] >= 0x20) {
+            x++;
+        }
+    }
+
+    return at;
+}
+
 /* How far the cursor may go on line i: its indent, to its last character. */
 static int last_col(int i)
 {
@@ -196,14 +217,6 @@ static int heading_last(int i)
     }
 
     return i;
-}
-
-/* Is line i part of the heading the cursor is on? */
-static int same_heading(int i, int c)
-{
-    int f = heading_first(c);
-
-    return f >= 0 && i >= f && i <= heading_last(f);
 }
 
 static int clamp_col(int i, int col)
@@ -251,6 +264,52 @@ static void place_cursor(void)
     }
 }
 
+/* What the cursor lights: nothing, a heading, or a link -- every line of
+ * either, when it wraps. Worked out when the cursor moves, and read by
+ * draw_line. */
+#define LIT_NONE 0
+#define LIT_HEAD 1
+#define LIT_LINK 2
+
+static int lit_kind;
+static int lit_first;               /* its first line */
+static int lit_last;                /* its last */
+static int lit_col;                 /* a link: the column it starts at, on lit_first */
+
+static void light(void)
+{
+    uint16_t target;
+    int from;
+    int to;
+
+    lit_kind = LIT_NONE;
+    if (nlines == 0) {
+        return;
+    }
+    if (link_at(cl, cc, &target, &from, &to)) {
+        int j = cl;
+
+        /* Back to the line it starts on, if it was wrapped onto this one. */
+        if (from == lines[cl].x && lines[cl].link == target) {
+            while (j > 0 && lines[j].link == target) {
+                j--;
+            }
+            from = last_opening(j, target);
+        }
+        lit_kind = LIT_LINK;
+        lit_first = j;
+        lit_col = from;
+        lit_last = cl;
+        while (lit_last + 1 < nlines && lines[lit_last + 1].link == target) {
+            lit_last++;
+        }
+    } else if (lines[cl].kind == REF_HEAD) {
+        lit_kind = LIT_HEAD;
+        lit_first = heading_first(cl);
+        lit_last = heading_last(lit_first);
+    }
+}
+
 static void draw_line(int row, int idx)
 {
     const ref_line* ln;
@@ -260,10 +319,9 @@ static void draw_line(int row, int idx)
     int skip;
     uint8_t style;
     uint16_t link;
-    int lit_from;                   /* the columns lit under the cursor */
-    int head_lit = 0;               /* a heading's line, lit to the edge */
-    int lit_to;
-    int at;                         /* the column of the text, before scrolling */
+    int in_lit;                     /* a line of what the cursor lights */
+    int head_lit;                   /* a heading's line, lit to the edge */
+    int lit;                        /* the text being drawn is lit */
     int vis;                        /* visible characters so far on the line */
 
     scr_begin(row);
@@ -299,17 +357,10 @@ static void draw_line(int row, int idx)
     }
     style = ln->style;
     link = ln->link;
-    lit_from = lit_to = -1;
-    if (idx == cl) {
-        uint16_t target;
-
-        link_at(cl, cc, &target, &lit_from, &lit_to);
-    }
-    if (ln->kind == REF_HEAD && lit_from < 0 && same_heading(idx, cl)) {
-        lit_from = 0;                       /* a heading's lines, all of them */
-        lit_to = 0x7fff;
-        head_lit = 1;
-    }
+    in_lit = idx >= lit_first && idx <= lit_last;
+    head_lit = lit_kind == LIT_HEAD && in_lit;
+    /* A link wrapped onto this line from the lit one is lit from the start. */
+    lit = head_lit || (lit_kind == LIT_LINK && in_lit && idx > lit_first);
     skip = ln->kind == REF_PRE ? hscroll : 0;
     vis = 0;
     for (k = ln->start; k < ln->end; k = REF_SKIP(t, k)) {
@@ -332,21 +383,26 @@ static void draw_line(int row, int idx)
             continue;
         case REF_LINK:
             link = (uint16_t)(t[k + 1] | t[k + 2] << 8);
+            if (lit_kind == LIT_LINK && idx == lit_first && ln->x + vis == lit_col) {
+                lit = 1;
+            }
             continue;
         case REF_LINK_END:
             link = REF_NONE;
+            if (!head_lit) {
+                lit = 0;
+            }
             continue;
         }
         if (c < 0x20) {
             continue;
         }
         here = vis++;
-        at = ln->x + here;
         if (skip > 0) {
             skip--;
             continue;
         }
-        if (at >= lit_from && at < lit_to) {
+        if (lit) {
             role = C_SEL;                   /* under the cursor */
         } else if (idx == mline && here >= mcol && here < mcol + mlen) {
             role = C_SEL;                   /* the find's match */
@@ -475,6 +531,8 @@ static void draw(void)
 {
     int r;
 
+    light();
+
     for (r = 0; r < scr_rows; r++) {
         draw_line(r, top + r);
     }
@@ -485,15 +543,12 @@ static void draw(void)
 
 #define SCROLLED 2
 
-/* Line i, or all of the heading it is part of, where they are on the
- * screen: what the cursor lights or stops lighting. */
-static void redraw_around(int i)
+/* Lines first to last, where they are on the screen. */
+static void redraw_lines(int first, int last)
 {
-    int f = heading_first(i);
-    int l = f >= 0 ? heading_last(f) : i;
     int j;
 
-    for (j = f >= 0 ? f : i; j <= l; j++) {
+    for (j = first; j <= last; j++) {
         if (j >= top && j < top + scr_rows) {
             draw_line(j - top, j);
         }
@@ -507,12 +562,15 @@ static void moved(int was, int was_cl)
 {
     int d = top - was;
     int r;
+    int of = lit_kind ? lit_first : -1;     /* what was lit */
+    int ol = lit_kind ? lit_last : -1;
 
     if (d > SCROLL_MAX || d < -SCROLL_MAX) {
         draw();
 
         return;
     }
+    light();
     if (d) {
         scr_scroll(0, d);
         if (d > 0) {
@@ -526,8 +584,14 @@ static void moved(int was, int was_cl)
         }
         draw_status();
     }
-    redraw_around(was_cl);
-    redraw_around(cl);
+    redraw_lines(was_cl, was_cl);
+    if (of >= 0) {
+        redraw_lines(of, ol);
+    }
+    redraw_lines(cl, cl);
+    if (lit_kind) {
+        redraw_lines(lit_first, lit_last);
+    }
     place_cursor();
     log_view(d);
 }
@@ -597,15 +661,12 @@ static int step_link(int dir)
     int idx = cl;
     int from_col = cc;
 
-    {
-        /* On a link already: step from its start. */
-        uint16_t t;
-        int a;
-        int b;
-
-        if (link_at(cl, cc, &t, &a, &b)) {
-            from_col = a;
-        }
+    /* On a link already: step from where it starts, on its first line if
+     * it wraps, so the link itself is not the one found. */
+    light();
+    if (lit_kind == LIT_LINK) {
+        idx = lit_first;
+        from_col = lit_col;
     }
     while (idx >= 0 && idx < nlines) {
         int n = line_links(idx, lcols, ltargets, LINE_LINKS);

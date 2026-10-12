@@ -329,8 +329,8 @@ core at least).
   arrows move it by line and character and the screen follows; Ctrl+Up/Down
   put it on the previous or next heading (brought to the top of the
   screen), Ctrl+Left/Right (or Shift+Tab/Tab) on the previous or next link.
-  The link under the cursor is lit on its line; a heading is lit whole,
-  every line of it when it wraps;
+  The link or heading under the cursor is lit whole -- every line of it,
+  when it wraps, as the FAQ's long questions do in its list;
   elsewhere the VDP's text cursor shows. Enter follows the link under the
   cursor, and the history keeps the cursor, so Backspace returns to the
   link that was followed -- and, from a topic opened from the contents, a
