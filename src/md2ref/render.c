@@ -85,7 +85,7 @@ void markup_pending(int at)
 
 /* Room for need bytes: grown 4 KB at a time, as the largest topic sets it
  * for the rest -- doubling would leave as much again unused. */
-static void room_for(unsigned need)
+static __attribute__((noinline)) void room_for(unsigned need)
 {
     unsigned more;
 
@@ -103,7 +103,9 @@ static void room_for(unsigned need)
 static void put(int b)
 {
     if (len < TOPIC_MAX) {
-        room_for(len + 1);
+        if (len >= cap) {
+            room_for(len + 1);          /* rarely: a call, and a frame, only then */
+        }
         buf[len] = (uint8_t)b;
     }
     len++;

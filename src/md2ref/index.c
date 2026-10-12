@@ -1319,50 +1319,84 @@ static int make_runs(unsigned long* starts)
     return runs_reread() == 0 ? nruns : -1;
 }
 
+/* A word's topics are kept, once gathered, as each one's number twice
+ * over, plus 1 if the word is in its title: so they sort as numbers, and
+ * the varints a word's entry holds -- the step from the topic before,
+ * doubled, plus the title's bit -- are a subtraction, with no shifting or
+ * masking of 16 bits, each a call on the eZ80. twice_of has each topic's
+ * number twice over, by its number as made. */
+static uint16_t* twice_of;
+
+/* A posting's two bytes, the topic as made and the title's bit on top, as
+ * kept. */
+ALWAYS_INLINE uint16_t as_kept(uint8_t lo, uint8_t hi)
+{
+    static volatile union {
+        unsigned v;
+        uint8_t b[3];
+    } made;
+
+    made.b[0] = lo;
+    made.b[1] = hi & 0x7F;
+    made.b[2] = 0;
+
+    return (uint16_t)(twice_of[made.v] + (hi & 0x80 ? 1 : 0));
+}
+
+/* A kept topic, its title's bit dropped. */
+ALWAYS_INLINE unsigned even(uint16_t v)
+{
+    return (unsigned)v - ((uint8_t)v & 1);
+}
+
 static int by_topic(const void* a, const void* b)
 {
-    return (int)(*(const uint16_t*)a & 0x7FFF) - (int)(*(const uint16_t*)b & 0x7FFF);
+    unsigned x = *(const uint16_t*)a;
+    unsigned y = *(const uint16_t*)b;
+
+    return x < y ? -1 : x > y ? 1 : 0;
 }
 
 /* A word's topics, as numbered now, sorted, each once (in_title if any
  * was). */
 static unsigned tidy(uint16_t* v, unsigned n)
 {
-    unsigned i;
-    unsigned o = 0;
+    uint16_t* end = v + n;
+    uint16_t* p;
+    uint16_t* o;
+    unsigned moves = 0;
 
-    for (i = 0; i < n; i++) {
-        v[i] = (uint16_t)((unsigned)final_of[v[i] & 0x7FFF] | (v[i] & 0x8000));
-    }
     /* Nearly in order, as gathered: inserted, while that costs no more
      * than a few moves each; past that, merged, so never n squared. */
-    {
-        unsigned moves = 0;
+    for (p = v + 1; p < end && moves <= 4 * n; p++) {
+        uint16_t x = *p;
+        uint16_t* q = p;
 
-        for (i = 1; i < n && moves <= 4 * n; i++) {
-            uint16_t x = v[i];
-            unsigned j = i;
-
-            while (j > 0 && (v[j - 1] & 0x7FFF) > (x & 0x7FFF)) {
-                v[j] = v[j - 1];
-                j--;
-                moves++;
+        while (q > v && q[-1] > x) {
+            *q = q[-1];
+            q--;
+            moves++;
+        }
+        *q = x;
+    }
+    if (p < end) {
+        md_sort(v, n, (unsigned)sizeof(uint16_t), by_topic);
+    }
+    /* Each topic once, in its title if any of its postings was. */
+    if (n == 0) {
+        return 0;
+    }
+    for (o = v, p = v + 1; p < end; p++) {
+        if (even(*p) == even(*o)) {
+            if ((uint8_t)*p & 1) {
+                *o = (uint16_t)(even(*o) + 1);  /* in the title, if either says so */
             }
-            v[j] = x;
-        }
-        if (i < n) {
-            md_sort(v, n, (unsigned)sizeof(uint16_t), by_topic);
-        }
-    }
-    for (i = 0; i < n; i++) {
-        if (o && (v[o - 1] & 0x7FFF) == (v[i] & 0x7FFF)) {
-            v[o - 1] |= v[i] & 0x8000;
         } else {
-            v[o++] = v[i];
+            *++o = *p;
         }
     }
 
-    return o;
+    return (unsigned)(o - v) + 1;
 }
 
 /* What write_words writes, gathered: a word's entry is a dozen small
@@ -1433,12 +1467,12 @@ static void emit_entry(const uint8_t* key, uint16_t* v, unsigned n)
         words_section.len += o;
     }
     for (j = 0; j < n; j++) {
-        unsigned t = v[j] & 0x7FFF;
+        unsigned kept = v[j];
 
-        o = varint(stage_room(4), (t - at_topic) << 1 | (unsigned)(v[j] >> 15));
+        o = varint(stage_room(4), kept - at_topic);     /* (t - before) * 2 + title */
         nstage += o;
         words_section.len += o;
-        at_topic = t;
+        at_topic = even((uint16_t)kept);
     }
     memcpy(prev_key, key, klen + 1);
     words_section.count++;
@@ -1499,7 +1533,7 @@ static void ov_next(void)
                 ov_cap = ov_cap ? ov_cap * 2 : 64;
                 ov_v = md_realloc(ov_v, ov_cap * (unsigned)sizeof(uint16_t));
             }
-            ov_v[ov_n++] = (uint16_t)(p[0] | p[1] << 8);
+            ov_v[ov_n++] = as_kept(p[0], p[1]);
             w->at += 1 + klen + 2;
         } while (ready(w) && key_cmp(w->buf + w->at, ov_key) == 0);
         w->first = ready(w) ? first_of(w) : 0;
@@ -1589,11 +1623,19 @@ static wref* sort_words(wref* from, wref* to, unsigned n)
 #define GATHER_BLOCK 4096
 #define GATHER_BYTES (48 * 1024)
 
-static uint16_t* rank_of;           /* each word's rank, by its number: 0xFFFF for none */
+/* Where each word's next posting goes, by its number -- NULL for a word
+ * not in the range being gathered: one look a posting, in four-byte slots
+ * as a subscript of three-byte pointers is a multiply. */
+typedef union {
+    uint16_t* p;
+    uint8_t pad[4];
+} post_at;
 
-/* The dictionary's postings for the words ranked r0 to r1, each into its
- * slice: one pass over the words file. 0, or -1. */
-static int gather(unsigned r0, unsigned r1, uint16_t** slice, uint16_t* fill)
+static post_at* post_to;
+
+/* The dictionary's postings for the words in the range being gathered,
+ * each where post_to says: one pass over the words file. 0, or -1. */
+static int gather(void)
 {
     static uint8_t in[RUN_WIN];
     unsigned have = 0;
@@ -1615,11 +1657,10 @@ static int gather(unsigned r0, unsigned r1, uint16_t** slice, uint16_t* fill)
             }
         }
         if (in[at] == POSTING) {
-            unsigned r = rank_of[in[at + 1] | (unsigned)in[at + 2] << 8];
+            post_at* q = &post_to[in[at + 1] | (unsigned)in[at + 2] << 8];
 
-            if (r >= r0 && r < r1) {
-                r -= r0;
-                slice[r][fill[r]++] = (uint16_t)(in[at + 3] | in[at + 4] << 8);
+            if (q->p) {
+                *q->p++ = as_kept(in[at + 3], in[at + 4]);
             }
             at += 5;
         } else {
@@ -1651,7 +1692,6 @@ int write_words(void (*emit)(const void* p, unsigned n))
     static unsigned long starts[MAX_RUNS + 1];
     static uint8_t key[WORD_MAX + 1];
     uint16_t* ids = NULL;
-    uint16_t* fill = NULL;
     uint16_t** slice = NULL;
     uint16_t** blocks = NULL;
     unsigned nranked = 0;
@@ -1666,6 +1706,14 @@ int write_words(void (*emit)(const void* p, unsigned n))
     words_section.dir = NULL;
     words_section.count = 0;
     prev_key[0] = 0;
+    {
+        int t;
+
+        twice_of = md_realloc(NULL, (unsigned)(ntopics + 1) * (unsigned)sizeof(uint16_t));
+        for (t = 0; t < ntopics; t++) {
+            twice_of[TOPIC(t).made] = (uint16_t)(t + t);
+        }
+    }
     dir_max = 0;
     stage_to = emit;
     nstage = 0;
@@ -1715,11 +1763,11 @@ int write_words(void (*emit)(const void* p, unsigned n))
         wref* sorted_w;
 
         ids = md_realloc(NULL, ndict * (unsigned)sizeof(uint16_t));
-        rank_of = md_realloc(NULL, ndict * (unsigned)sizeof(uint16_t));
+        post_to = md_realloc(NULL, ndict * (unsigned)sizeof(post_at));
         for (k = 0; k < ndict; k++) {
             const dword* d = &DW(k);
 
-            rank_of[k] = 0xFFFF;            /* no rank: a stop word, never a topic's */
+            post_to[k].p = NULL;            /* in no range yet; a stop word in none */
             if (d->count) {
                 o->s = d->s;
                 o->len = d->len;
@@ -1731,12 +1779,10 @@ int write_words(void (*emit)(const void* p, unsigned n))
         sorted_w = sort_words(w, w2, n);
         for (k = 0, o = sorted_w; k < n; k++, o++) {
             ids[k] = o->id;
-            rank_of[o->id] = (uint16_t)k;
         }
         free(w2);
         free(w);
         nranked = n;
-        fill = md_realloc(NULL, (n + 1) * (unsigned)sizeof(uint16_t));
         slice = md_realloc(NULL, (n + 1) * (unsigned)sizeof(uint16_t*));
         blocks = md_realloc(NULL, (n + 1) * (unsigned)sizeof(uint16_t*));
     }
@@ -1761,19 +1807,21 @@ int write_words(void (*emit)(const void* p, unsigned n))
                 left = size;
             }
             slice[r1 - r0] = at;
-            fill[r1 - r0] = 0;
+            post_to[ids[r1]].p = at;
             at += DW(ids[r1]).count;
             left -= need;
             r1++;
         }
-        failed = gather(r0, r1, slice, fill) != 0;
+        failed = gather() != 0;
         for (k = r0; k < r1 && !failed; k++) {
             const dword* d = &DW(ids[k]);
+            uint16_t* first = slice[k - r0];
 
             key[0] = d->len;
             memcpy(key + 1, d->s, d->len);
             ov_before(key);
-            emit_entry(key, slice[k - r0], fill[k - r0]);
+            emit_entry(key, first, (unsigned)(post_to[ids[k]].p - first));
+            post_to[ids[k]].p = NULL;   /* out of the range */
         }
         while (nblocks) {
             free(blocks[--nblocks]);
@@ -1789,11 +1837,12 @@ int write_words(void (*emit)(const void* p, unsigned n))
     ov_v = NULL;
     ov_cap = 0;
     free(ids);
-    free(fill);
     free(slice);
     free(blocks);
-    free(rank_of);
-    rank_of = NULL;
+    free(post_to);
+    post_to = NULL;
+    free(twice_of);
+    twice_of = NULL;
     free_dictionary();
 
     return failed ? -1 : 0;

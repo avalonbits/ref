@@ -571,6 +571,16 @@ class Md2ref(unittest.TestCase):
             got = ask(data, 'search', [word]).splitlines()
             self.assertEqual(got[0].split()[0], '400', word)
 
+    def test_a_title_word_said_in_the_menu_too(self):
+        # A topic too big to show its children has a menu of them, whose
+        # words are its own too: "things" is in its title, and in its menu
+        # without the title's bit. Kept once, it keeps the bit.
+        page = '# Alpha Things\n\n' + filler('alpha', 200) + ''.join('## Things %d\n\ntext\n\n' % k
+                                                                  for k in range(5))
+        p, data, left = compile_pages({'index.md': page})
+        self.assertEqual(p.returncode, 0, p.stdout)
+        self.assertEqual(ask(data, 'search', ['things']).split()[:2], ['6', '0:1:1'])
+
     def test_words_past_one_run(self):
         # More words than one 16 KB run of the words file holds: sorted in
         # runs, merged, every word still finds its topic.
