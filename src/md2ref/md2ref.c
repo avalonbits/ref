@@ -1,8 +1,8 @@
 /*
  * md2ref: Markdown pages compiled into a ref document. See md2ref.h.
  *
- *   md2ref [-t <title>] [-w] <name> [<dir> | <page.md>...]
- *   md2ref [-t <title>] [-w] -o <file.dat> <dir> | <page.md>...
+ *   md2ref [-t <title>] [-w] [-z] <name> [<dir> | <page.md>...]
+ *   md2ref [-t <title>] [-w] [-z] -o <file.dat> <dir> | <page.md>...
  *
  *   <name>  the document: ref-doc/<name>.dat, where a program keeps its
  *           own, ref-doc made if it is not there; the pages, if none are
@@ -10,6 +10,9 @@
  *   -o      the document to write instead, anywhere
  *   -t      its title (else the first page's first heading)
  *   -w      a link that leads nowhere is a warning, not an error
+ *   -z      compress each topic's text: a smaller document, but compressing
+ *           takes as long as all the rest on the Agon; else each topic is
+ *           stored as it is, an LZ4 block of literals any reader reads
  *   -e      errors and warnings into this file too, which is made even
  *           when there are none: ade reads it after a build
  *   @list   the pages named in this file, one a line: a build.obey line
@@ -56,6 +59,7 @@
 
 int md_errors;
 int md_keep_going;
+int md_compress;
 
 static FILE* errors;        /* -e */
 
@@ -327,8 +331,8 @@ static int read_list(const char* path, char** inputs, int* n, int max)
 
 static int usage(void)
 {
-    printf("usage: md2ref [-t <title>] [-w] [-e <file>] <name> [<dir> | <page.md>... | @list]\n"
-           "       md2ref [-t <title>] [-w] [-e <file>] -o <file.dat> <dir> | <page.md>... | @list\n"
+    printf("usage: md2ref [-t <title>] [-w] [-z] [-e <file>] <name> [<dir> | <page.md>... | @list]\n"
+           "       md2ref [-t <title>] [-w] [-z] [-e <file>] -o <file.dat> <dir> | <page.md>... | @list\n"
            "  <name> writes " DOC_DIR "/<name>.dat, from the current directory's pages\n"
            "  if none are given; @list names the pages in a file, one a line\n");
 
@@ -448,6 +452,8 @@ int main(int argc, char** argv)
             title = argv[++i];
         } else if (strcmp(argv[i], "-w") == 0) {
             md_keep_going = 1;
+        } else if (strcmp(argv[i], "-z") == 0) {
+            md_compress = 1;
         } else if (strcmp(argv[i], "-e") == 0 && i + 1 < argc) {
             error_file = argv[++i];
         } else if (argv[i][0] == '-') {

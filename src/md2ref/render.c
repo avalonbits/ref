@@ -605,11 +605,9 @@ typedef struct {
     int topic;
     unsigned long total;    /* its and its descendants' markup's length */
     unsigned descendants;
-    uint8_t* packed;
-    unsigned packed_len;
+    uint8_t* text;          /* its markup, as it is: packed only as it is written */
     unsigned len;
     mark* marks;            /* its placeholders: where in its markup, which link */
-    unsigned* at;           /* and where each is in packed */
     int nmarks;
 } held;
 
@@ -625,13 +623,13 @@ static unsigned page_topics;
 unsigned view_size;
 unsigned max_packed;
 
-/* buf, len bytes of it, compressed into packing: its length. Placeholders
- * stay literal, and fixed_at says where each landed. */
+/* src, len bytes of it, compressed into packing (-z): its length.
+ * Placeholders stay literal, and fixed_at says where each landed. */
 static unsigned* fixed;
 static unsigned* fixed_at;
 static int max_fixed;
 
-static unsigned pack(const mark* m, int n)
+static unsigned pack(const uint8_t* src, const mark* m, int n)
 {
     unsigned room = len + len / 255 + 16;
     int k;
@@ -649,7 +647,7 @@ static unsigned pack(const mark* m, int n)
         fixed[k] = m[k].pos;
     }
 
-    return lz4_compress(buf, len, packing, room, fixed, n, fixed_at);
+    return lz4_compress(src, len, packing, room, fixed, n, fixed_at);
 }
 
 /* The words of len bytes of buf from start. */
@@ -682,7 +680,6 @@ void render_topic(int t, const block* b, int n)
     topic* tp = &TOPIC(t);
     const page* p = &pages[tp->page];
     held* h;
-    unsigned packed;
     int k;
 
     len = 0;
@@ -724,23 +721,18 @@ void render_topic(int t, const block* b, int n)
         hold[k].total += len;
         hold[k].descendants++;
     }
-    packed = pack(marks, nmarks);
     h = &hold[nheld < DEPTH ? nheld++ : DEPTH - 1];
     h->topic = t;
     h->total = len;
     h->descendants = 0;
-    h->packed = md_realloc(NULL, packed + 1);
-    memcpy(h->packed, packing, packed);
-    h->packed_len = packed;
+    h->text = md_realloc(NULL, len + 1);
+    memcpy(h->text, buf, len);
     h->len = len;
     h->nmarks = nmarks;
     h->marks = NULL;
-    h->at = NULL;
     if (nmarks) {
         h->marks = md_realloc(NULL, (unsigned)nmarks * (unsigned)sizeof(mark));
         memcpy(h->marks, marks, (unsigned)nmarks * sizeof(mark));
-        h->at = md_realloc(NULL, (unsigned)nmarks * (unsigned)sizeof(unsigned));
-        memcpy(h->at, fixed_at, (unsigned)nmarks * sizeof(unsigned));
     }
 }
 
@@ -775,58 +767,66 @@ static void add_menu(int t)
 }
 
 /* A held topic complete: links to its children if it is too big to show
- * with them, and written, its placeholders where write_book patches them. */
+ * with them, and written -- stored as it is, an LZ4 block of literals, or
+ * with -z compressed -- its placeholders where write_book patches them. */
 static void complete(held* h)
 {
     topic* tp = &TOPIC(h->topic);
-    const uint8_t* text = h->packed;
-    unsigned packed = h->packed_len;
-    const unsigned* at = h->at;
+    const uint8_t* text = h->text;
+    const mark* m = h->marks;
+    int nm = h->nmarks;
     unsigned long where;
+    unsigned packed;
+    unsigned head = 0;
     int k;
 
     tp->span = h->total <= JOIN_LIMIT ? (int16_t)h->descendants : 0;
     len = h->len;
     if (tp->span == 0 && tp->nchildren) {
         room_for(len + 1);
-        ref_lz4(h->packed, h->packed_len, buf, len, NULL, 0);
+        memcpy(buf, h->text, len);
         nmarks = 0;
         for (k = 0; k < h->nmarks; k++) {
             add_mark(h->marks[k].pos, h->marks[k].link);
         }
         add_menu(h->topic);
-        if (!too_big(h->topic)) {
-            packed = pack(marks, nmarks);
-            text = packing;
-            at = fixed_at;
-            free(h->marks);
-            h->marks = md_realloc(NULL, (unsigned)(nmarks + 1) * (unsigned)sizeof(mark));
-            memcpy(h->marks, marks, (unsigned)nmarks * sizeof(mark));
-            h->nmarks = nmarks;
-        }
+        too_big(h->topic);
+        text = buf;
+        m = marks;
+        nm = nmarks;
+    }
+    if (md_compress) {
+        packed = pack(text, m, nm);
+        where = write_text(packing, packed);
+    } else {
+        static uint8_t lits[2 + TOPIC_MAX / 255];
+
+        head = lz4_literals(lits, len);
+        where = write_text(lits, head);
+        write_text(text, len);
+        packed = head + len;
     }
     if (packed > 0xFFFF) {
         md_error(pages[tp->page].path, 0, "topic '%s' is too big", tp->title);
     }
-    where = write_text(text, packed);
     tp->text_at = where;
-    tp->packed = packed;
+    tp->packed = (uint16_t)packed;
     tp->len = len;
     if (packed > max_packed) {
         max_packed = packed;
     }
-    for (k = 0; k < h->nmarks; k++) {
-        int link = h->marks[k].link;
+    for (k = 0; k < nm; k++) {
+        int link = m[k].link;
+        unsigned at = md_compress ? fixed_at[k] : head + m[k].pos;
 
         if (link >= 0) {                /* waiting for its page to be read */
-            link_placed(link, add_patch(where + at[k], PATCH_WAITING));
+            link_placed(link, add_patch(where + at, PATCH_WAITING));
         } else {                        /* a topic of this page, numbered when it is read */
-            add_patch(where + at[k], PATCH_MADE + (unsigned)(-2 - link));
+            add_patch(where + at, PATCH_MADE + (unsigned)(-2 - link));
         }
     }
-    free(h->packed);
+    free(h->text);
     free(h->marks);
-    free(h->at);
 }
 
 void render_top(int t)

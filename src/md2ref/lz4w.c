@@ -101,6 +101,18 @@ static unsigned sequence(uint8_t* o, const uint8_t* lit, unsigned nlit, unsigned
     return k;
 }
 
+unsigned lz4_literals(uint8_t* o, unsigned n)
+{
+    unsigned k = 1;
+
+    o[0] = (uint8_t)((n < 15 ? n : 15) << 4);
+    if (n >= 15) {
+        k += length_bytes(o + 1, n - 15);
+    }
+
+    return k;
+}
+
 /* The first placeholder that ends at or after p: its index, or n. */
 static int fixed_from(const unsigned* fixed, int n, unsigned p)
 {

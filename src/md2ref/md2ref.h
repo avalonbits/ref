@@ -1,21 +1,21 @@
 /*
  * md2ref: Markdown pages compiled into a ref document (docs/FORMAT.md).
  *
- *   md2ref [-t <title>] [-w] [-e <file>] <name> [<dir> | <page.md>... | @list]
- *   md2ref [-t <title>] [-w] [-e <file>] -o <file.dat> <dir> | <page.md>... | @list
+ *   md2ref [-t <title>] [-w] [-z] [-e <file>] <name> [<dir> | <page.md>... | @list]
+ *   md2ref [-t <title>] [-w] [-z] [-e <file>] -o <file.dat> <dir> | <page.md>... | @list
  *
  * Portable C, like the reader core: it builds for the PC, and for the Agon
  * with agondev, so a program's documentation can be compiled where it is
  * written.
  *
  * One pass, in fixed memory, as aed, acc and zap work: each page is read
- * through a window that holds whole blocks, and each topic is rendered,
- * compressed and written out as soon as its last block is read. What
+ * through a window that holds whole blocks, and each topic is rendered
+ * and written out as soon as its last block is read. What
  * cannot be known yet is settled the way an assembler settles it:
  *
  * - a link to a topic not yet read is a placeholder, patched when the
  *   document is put together (book.c, write.c);
- * - a topic is held, compressed, until its last descendant is read, as
+ * - a topic is held until its last descendant is read, as
  *   only then is it known whether it is too big to show with them, and so
  *   ends with links to its children (render.c).
  *
@@ -86,6 +86,7 @@ void md_error(const char* file, int line, const char* fmt, ...);
 void md_warn(const char* file, int line, const char* fmt, ...);
 extern int md_errors;
 extern int md_keep_going;   /* -w: an unresolved link is a warning */
+extern int md_compress;     /* -z: each topic's text compressed, not stored */
 
 /* --- the pages ------------------------------------------------------------------ */
 
@@ -331,6 +332,11 @@ int write_words(void (*emit)(const void* p, unsigned n));
  * nor matched from, and where each lands in dst goes in fixed_at. */
 unsigned lz4_compress(const uint8_t* src, unsigned n, uint8_t* dst, unsigned room,
                       const unsigned* fixed, int nfixed, unsigned* fixed_at);
+
+/* What goes before n bytes of text to make them an LZ4 block of literals
+ * alone -- a topic stored as it is, which any LZ4 reader reads -- into o
+ * (at most 2 + n / 255 bytes): how many. */
+unsigned lz4_literals(uint8_t* o, unsigned n);
 
 /* The scratch files, beside the document: <out>~t for the text, <out>~w for
  * the words. 0, or -1. */

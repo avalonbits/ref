@@ -394,8 +394,8 @@ class Md2ref(unittest.TestCase):
                                    'two', 'barbaz', 'prea', 'mid']).splitlines()
         self.assertEqual(got, ['1 0:0:1'] * 6 + ['0'] * 3)
 
-    def test_text_is_compressed(self):
-        # Ten words in an order that never repeats for long: LZ4 finds the
+    def test_text_is_compressed_with_z(self):
+        # With -z. Ten words in an order that never repeats for long: LZ4 finds the
         # words again, through its hash of every four bytes. The whole
         # document, its index too, comes to about half the page; with a
         # hash that told nothing apart it was larger than the page.
@@ -407,9 +407,32 @@ class Md2ref(unittest.TestCase):
             said.append(names[v >> 16 & 7 if v & 1 else (v >> 8) % 10])
         page = '# Doc\n\n' + '\n\n'.join(' '.join(said[k:k + 12])
                                            for k in range(0, len(said), 12)) + '\n'
-        p, data, left = compile_pages({'index.md': page})
+        p, data, left = compile_pages({'index.md': page}, '-z')
         self.assertEqual(p.returncode, 0, p.stdout)
         self.assertLess(len(data), len(page) * 3 // 4)
+
+    def test_text_is_stored_as_it_is(self):
+        # Without -z each topic is an LZ4 block of literals alone, which
+        # the reader reads as it reads one compressed: every view the same
+        # as with -z -- topics short and long (a length of 15 and more, and
+        # 255 and more, takes bytes of its own), placeholders patched in
+        # place (links to a page read later, and to a heading further on),
+        # and links to the children of a topic too big to show with them,
+        # added only as it is written.
+        long = filler('long', 200)                  # past what a topic shows with its own
+        pages = {
+            'a.md': ('# A\n\nSee [b](b.md) and [later](#c-part).\n\n## Big\n\n' + long
+                     + '### Child one\n\nx\n\n### Child two\n\ny\n\n## C part\n\nz\n'),
+            'b.md': '# B\n\n' + 'short words here ' * 30 + '\n\nBack to [a](a.md#big).\n',
+        }
+        p, stored, left = compile_pages(pages)
+        self.assertEqual(p.returncode, 0, p.stdout)
+        p, packed, left = compile_pages(pages, '-z')
+        self.assertEqual(p.returncode, 0, p.stdout)
+        self.assertEqual(views(stored), views(packed))
+        self.assertGreater(len(stored), len(packed))
+        self.assertIn(b'In this section:', b''.join(views(stored)))
+        self.assertIn(b'The long paragraph 199 says nothing much', stored)
 
     def test_characters_into_the_agon_font(self):
         # Printable ASCII as it is, to ~; DEL and a stray byte are '?';
@@ -448,12 +471,12 @@ class Md2ref(unittest.TestCase):
         self.assertIn(b'\xc1\x02\x02not code\x00', v)          # PARA
 
     def test_text_is_compressed_past_64_kb(self):
-        # The compressor's table of positions is shared by every topic, and
+        # With -z. The compressor's table of positions is shared by every topic, and
         # cleared only when they would pass 16 bits: 120 KB of topics, and
         # those after the first 64 KB compress like the rest.
         page = '# Doc\n\n' + ''.join('## Part %d\n\n%s' % (k, filler('part%d' % k, 20))
                                    for k in range(75))
-        p, data, left = compile_pages({'index.md': page})
+        p, data, left = compile_pages({'index.md': page}, '-z')
         self.assertEqual(p.returncode, 0, p.stdout)
         self.assertGreater(len(page), 120000)
         self.assertLess(len(data), len(page) // 3)

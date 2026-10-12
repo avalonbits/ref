@@ -223,8 +223,8 @@ once, and writes each topic as soon as it can:
 | pages | [`input.c`](../src/md2ref/input.c) | the files given, or a directory's `.md` files, index first; each read through a window a *run* at a time |
 | blocks | [`parse.c`](../src/md2ref/parse.c) | a run's lines into blocks: headings, paragraphs, code, lists, quotes, notes, tables, one function each |
 | outline | [`book.c`](../src/md2ref/book.c) | topics from headings as they come, anchors as Python-Markdown makes them, links resolved or left pending |
-| markup | [`render.c`](../src/md2ref/render.c), [`inline.c`](../src/md2ref/inline.c) | each topic in ref's markup, tables laid out, compressed, and held until its descendants are read |
-| text | [`write.c`](../src/md2ref/write.c), [`lz4w.c`](../src/md2ref/lz4w.c) | each topic, complete, to the text's scratch file |
+| markup | [`render.c`](../src/md2ref/render.c), [`inline.c`](../src/md2ref/inline.c) | each topic in ref's markup, tables laid out, its words taken as it is written, and held until its descendants are read |
+| text | [`write.c`](../src/md2ref/write.c), [`lz4w.c`](../src/md2ref/lz4w.c) | each topic, complete, to the text's scratch file: stored as an LZ4 block of literals, or with `-z` compressed |
 | indexes | [`index.c`](../src/md2ref/index.c) | keys from headings' code spans, VDU sequences and title words, normalised by the reader core's own [`normalize.c`](../src/core/normalize.c); every word of every topic to the words' scratch file |
 | document | [`write.c`](../src/md2ref/write.c) | the tables from memory, the text copied in with each link patched, the words sorted and merged in |
 
@@ -240,13 +240,13 @@ Three things are not known when a topic is read, and are settled the way
 an assembler settles a forward reference:
 
 - **A link to a page not read yet** is a placeholder, and the link is
-  remembered with its target. The compressor leaves those two bytes as
-  literals, never matched or matched from, so they lie in the file as they
-  do in the markup. When the document is put together, every anchor known,
+  remembered with its target. Stored, those two bytes lie in the file as
+  they do in the markup; with `-z` the compressor leaves them as literals,
+  never matched or matched from, so they still do. When the document is put together, every anchor known,
   each is patched as the text is copied in.
 - **Links to a topic's children** are added only if it shows too much with
   its descendants, which is only known once the last of them is read. So a
-  topic is held, compressed, until then. Only its ancestors are held with
+  topic is held until then. Only its ancestors are held with
   it, at most a few.
 - **A page's top topic** is its level-1 heading if that is the page's
   first block and its only level-1 heading. The first is taken to be the
@@ -264,8 +264,15 @@ distinct words go to a second scratch file. At the end it is sorted in
 16 KB runs into a third, and those are merged through a 512-byte window
 each.
 
+**Stored, not compressed,** unless `-z` asks: compressing took as long on
+the Agon as all the rest of the work, to save card space that does not
+matter there. A stored topic is an LZ4 block of literals alone, which ref
+reads as it reads any, so the format is the same; the document is about
+40% larger (827 KB for agon-docs, 587 KB with `-z`), and ref's buffer for
+a packed topic as big as the largest topic.
+
 All of agon-docs, 637 KB of Markdown and 721 topics, peaks at about
-280 KB on the Agon (`make agon-md2ref-heap` measures it). What grows with
+260 KB on the Agon (`make agon-md2ref-heap` measures it). What grows with
 a document is its outline: its topics, their titles and anchors, and its
 keys.
 
@@ -273,7 +280,7 @@ It ends with "Done in N.NN seconds", worded as zap and acc word it, from
 MOS's clock. Under an emulator running flat out that clock means nothing,
 so `make agon-md2ref-cycles` builds one that has the emulator count its
 cycles instead (IO ports 0x40 and 0x41, fab-agon-emulator 2037657 on), as
-acc's bench does. All of agon-docs takes 4.6 billion cycles: 251 seconds
+acc's bench does. All of agon-docs takes 750 million cycles: 41 seconds
 at the Agon's 18.432 MHz. That is a lower bound. The count is exact for
 the eZ80's own work, but the emulator charges nothing for reading the SD
 card, and md2ref reads its pages and three scratch files. The ports are
