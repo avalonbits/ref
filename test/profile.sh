@@ -11,7 +11,8 @@
 # own symbols at its place in the map. Prints the total, the cycles per
 # byte of Markdown, and the functions that take the most. FUNC=<name>
 # also prints that function's disassembly, each instruction's cycles
-# beside it.
+# beside it; CALLERS=<name>[,<name>...], the functions that call each,
+# busiest first.
 set -uo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SCRATCH=$(mktemp -d)
@@ -43,10 +44,11 @@ console=$(EMU=$PROF_EMU emu_run "$sd" 1800)
 cycles=$(sed -n 's/.*Debug OUT(0x41): \([0-9]*\) CPU cycles.*/\1/p' <<< "$console" | head -1)
 [ -n "$cycles" ] && [ -s "$AGON_PROFILE" ] || { echo "no profile"; tail -5 <<< "$console"; exit 1; }
 
-python3 - "$ROOT/bin/md2ref-cycles/md2ref.map" "$AGON_PROFILE" "$cycles" "$bytes" "$TOP" "${FUNC:-}" <<'EOF'
+python3 - "$ROOT/bin/md2ref-cycles/md2ref.map" "$AGON_PROFILE" "$cycles" "$bytes" "$TOP" "${FUNC:-}" "${CALLERS:-}" "$ROOT/bin/md2ref-cycles/md2ref.bin" <<'EOF'
 import re, subprocess, sys, os
 mapfile, prof, cycles, nbytes, top = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5])
 func = sys.argv[6]
+callers, binary = sys.argv[7], sys.argv[8]
 objs = []
 nm = os.path.expanduser('~/agondev/bin/ez80-none-elf-nm')
 syms = {}
@@ -103,4 +105,21 @@ if func:
             a = base + int(m.group(1), 16)
             c = at.get(a, 0)
             print(f'{c:12} {c / nbytes:7.1f}  {a:06x}  {m.group(2)}')
+for callee in filter(None, callers.split(',')):
+    target = next(a for a in addrs if syms[a] == callee or syms[a].split(' (')[0] == callee)
+    dis = subprocess.run([os.path.expanduser('~/agondev/bin/ez80-none-elf-objdump'), '-D', '-b', 'binary',
+                          '-m', 'ez80-adl', '--adjust-vma=0x40000', binary],
+                         capture_output=True, text=True).stdout
+    by_fn = {}
+    for l in dis.splitlines():
+        m = re.match(r'^\s+([0-9a-f]+):\s+(?:[0-9a-f]{2} )+\s*\t(call|jp)\s+(?:\w+,)?0x([0-9a-f]+)', l)
+        if m and int(m.group(3), 16) == target:
+            a = int(m.group(1), 16)
+            i = bisect.bisect_right(addrs, a) - 1
+            fn = syms[addrs[i]] if i >= 0 else '?'
+            by_fn[fn] = by_fn.get(fn, 0) + at.get(a, 0)
+    print(f'\ncalls to {callee}, by the cycles of the calls themselves:')
+    for fn, c in sorted(by_fn.items(), key=lambda kv: -kv[1])[:12]:
+        if c:
+            print(f'{c:12} {fn}')
 EOF

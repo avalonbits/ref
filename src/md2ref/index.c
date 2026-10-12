@@ -45,7 +45,11 @@ static ref_file settings;           /* only what ref_normalize reads */
  * the stop words by first letter, STOP[stop_at[c - 'a']] on to
  * STOP[stop_at[c - 'a' + 1]], with their lengths. Every word of every
  * topic passes through these. */
+#define NOT_DIGIT 1
+#define REAL      2         /* not only '_' and '$' */
+
 static uint8_t word_char[256];
+static uint8_t word_kind[256];      /* NOT_DIGIT | REAL, for a byte in a word */
 static uint8_t stop_at[27];
 static uint8_t stop_len[NSTOP];
 
@@ -60,6 +64,8 @@ static void make_tables(void)
         } else if (c >= 'A' && c <= 'Z') {
             word_char[c] = (uint8_t)(c + 32);
         }
+        word_kind[c] = (uint8_t)((c >= '0' && c <= '9' ? 0 : NOT_DIGIT)
+                                 | (c != '_' && c != '$' ? REAL : 0));
     }
     for (c = 0; c < 26; c++) {
         stop_at[c] = (uint8_t)k;
@@ -347,38 +353,40 @@ static int vdu_key(const char* text, char* out)
     return end;
 }
 
-/* The words of s (lower-cased first): each with fn. */
+/* The words of s (lower-cased first): each with fn. A word's kind is its
+ * bytes' kinds or'ed, a byte at a time: an 8-bit or is in line, where an
+ * int's is a call. */
 static void each_word(const char* text, int min, void (*fn)(const char* w, int len, int topic, int arg),
                       int topic, int arg)
 {
-    static char w[WORD_MAX + 1];
+    static uint8_t w[WORD_MAX + 1];
     const uint8_t* s = (const uint8_t*)text;
 
     if (!word_char['a']) {
         make_tables();
     }
     for (;;) {
-        int n = 0;
-        int digits = 1;
-        int real = 0;
-        unsigned c;
+        uint8_t* o = w;
+        uint8_t kind = 0;
+        uint8_t c;
+        int n;
 
-        while (*s && !word_char[*s]) {
+        while (!word_char[*s]) {
+            if (!*s) {
+                return;
+            }
             s++;
-        }
-        if (!*s) {
-            return;
         }
         while ((c = word_char[*s]) != 0) {
-            if (n < WORD_MAX) {
-                w[n++] = (char)c;
+            if (o < w + WORD_MAX) {
+                *o++ = c;
             }
-            digits &= c - '0' <= 9u;
-            real |= c >= '0' && c != '_';   /* not only '$' and '_' */
+            kind |= word_kind[*s];
             s++;
         }
-        if (n >= min && !digits && real && !is_stop(w, n)) {
-            fn(w, n, topic, arg);
+        n = (int)(o - w);
+        if (n >= min && kind == (NOT_DIGIT | REAL) && !is_stop((const char*)w, n)) {
+            fn((const char*)w, n, topic, arg);
         }
     }
 }

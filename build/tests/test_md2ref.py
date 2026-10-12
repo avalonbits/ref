@@ -151,7 +151,7 @@ class Md2ref(unittest.TestCase):
         # Three letters or more of a-z, 0-9, _ and $, lower-cased, less the
         # stop words, all-digit runs, and runs of only _ and $: here doc
         # (the title), words, $ff, x86, upper, x_1, 9_9 and $12.
-        p, data, left = compile_pages({'index.md': '# Doc\n\nWords: 1234 $$$ ___ $_$ $ff x86 _x zz '
+        p, data, left = compile_pages({'index.md': '# Doc\n\nWords: 1234 2048 $$$ ___ $_$ $ff x86 _x zz '
                                                    'Through UPPER further the x_1 9_9 $12.\n'})
         self.assertEqual(p.returncode, 0, p.stdout)
         self.assertIn('words 8\n', ask(data, 'info'))
