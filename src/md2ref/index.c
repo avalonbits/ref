@@ -41,12 +41,48 @@ unsigned norm_len;
 
 static ref_file settings;           /* only what ref_normalize reads */
 
+/* For each byte, 0 if it is not in a word, else the byte lower-cased; and
+ * the stop words by first letter, STOP[stop_at[c - 'a']] on to
+ * STOP[stop_at[c - 'a' + 1]], with their lengths. Every word of every
+ * topic passes through these. */
+static uint8_t word_char[256];
+static uint8_t stop_at[27];
+static uint8_t stop_len[NSTOP];
+
+static void make_tables(void)
+{
+    int c;
+    int k = 0;
+
+    for (c = 0; c < 256; c++) {
+        if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '$') {
+            word_char[c] = (uint8_t)c;
+        } else if (c >= 'A' && c <= 'Z') {
+            word_char[c] = (uint8_t)(c + 32);
+        }
+    }
+    for (c = 0; c < 26; c++) {
+        stop_at[c] = (uint8_t)k;
+        while (k < NSTOP && STOP[k][0] == 'a' + c) {
+            stop_len[k] = (uint8_t)strlen(STOP[k]);
+            k++;
+        }
+    }
+    stop_at[26] = (uint8_t)k;
+}
+
+#define STOP_MAX 7          /* the longest stop word */
+
 static int is_stop(const char* w, int len)
 {
+    int c = w[0] - 'a';
     int k;
 
-    for (k = 0; k < NSTOP; k++) {
-        if ((int)strlen(STOP[k]) == len && memcmp(STOP[k], w, (size_t)len) == 0) {
+    if (len > STOP_MAX || c < 0 || c >= 26) {
+        return 0;
+    }
+    for (k = stop_at[c]; k < stop_at[c + 1]; k++) {
+        if (stop_len[k] == len && memcmp(STOP[k], w, (size_t)len) == 0) {
             return 1;
         }
     }
@@ -311,36 +347,34 @@ static int vdu_key(const char* text, char* out)
     return end;
 }
 
-static int is_word_char(int c)
-{
-    return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '$';
-}
-
 /* The words of s (lower-cased first): each with fn. */
-static void each_word(const char* s, int min, void (*fn)(const char* w, int len, int topic, int arg),
+static void each_word(const char* text, int min, void (*fn)(const char* w, int len, int topic, int arg),
                       int topic, int arg)
 {
     static char w[WORD_MAX + 1];
+    const uint8_t* s = (const uint8_t*)text;
 
-    while (*s) {
+    if (!word_char['a']) {
+        make_tables();
+    }
+    for (;;) {
         int n = 0;
         int digits = 1;
         int real = 0;
+        unsigned c;
 
-        while (*s && !is_word_char(*s >= 'A' && *s <= 'Z' ? *s + 32 : *s)) {
+        while (*s && !word_char[*s]) {
             s++;
         }
-        while (*s) {
-            int c = *s >= 'A' && *s <= 'Z' ? *s + 32 : *s;
-
-            if (!is_word_char(c)) {
-                break;
-            }
+        if (!*s) {
+            return;
+        }
+        while ((c = word_char[*s]) != 0) {
             if (n < WORD_MAX) {
                 w[n++] = (char)c;
             }
-            digits &= c >= '0' && c <= '9';
-            real |= c != '_' && c != '$';
+            digits &= c - '0' <= 9u;
+            real |= c >= '0' && c != '_';   /* not only '$' and '_' */
             s++;
         }
         if (n >= min && !digits && real && !is_stop(w, n)) {

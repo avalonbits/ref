@@ -82,6 +82,7 @@ fi
 # The time: the cycles from port 0x40's write to 0x41's, which the
 # emulator prints on the host, over the eZ80's 18.432 MHz.
 CYCLES_EMU=${CYCLES_EMU:-$HOME/fab-agon-emulator-2037657}
+BUDGET=5200
 if [ -z "$BIG" ]; then
     echo "SKIP  md2ref's time on the Agon: no build/cache (make dat)"
 elif [ ! -x "$CYCLES_EMU/agon-cli-emulator" ]; then
@@ -98,8 +99,14 @@ else
           "$([ "${cycles:-0}" -gt 0 ] && echo counted)" counted
     check "  and the counting build writes the same document" \
           "$(md5sum < "$sd/big.dat" 2>/dev/null)" "$(md5sum < "$SCRATCH/big.dat")"
-    [ -n "$cycles" ] && printf 'TIME  all of agon-docs: %d cycles, %d.%02d s at 18.432 MHz, SD card reads not counted\n' \
-        "$cycles" $((cycles / 18432000)) $((cycles % 18432000 * 100 / 18432000))
+    # And the budget, in cycles a byte of Markdown, lowered as md2ref gets
+    # faster: so a change that slows it is caught here.
+    bytes=$(cat "$SCRATCH"/big/*.md | wc -c)
+    per_byte=$(( ${cycles:-0} / bytes ))
+    check "  within its budget of $BUDGET cycles a byte" \
+          "$([ "${cycles:-0}" -gt 0 ] && [ "$per_byte" -le "$BUDGET" ] && echo within || echo "$per_byte")" within
+    [ -n "$cycles" ] && printf 'TIME  all of agon-docs: %d cycles, %d a byte, %d.%02d s at 18.432 MHz, SD card reads not counted\n' \
+        "$cycles" "$per_byte" $((cycles / 18432000)) $((cycles % 18432000 * 100 / 18432000))
 fi
 [ -n "${KEEP:-}" ] && cp "$sd/proj/ref-doc/myprog.dat" "$SCRATCH/pc.dat" "$KEEP/"
 [ $status = 0 ] || printf '%s\n' "$console" | tail -30

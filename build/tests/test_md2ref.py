@@ -147,6 +147,17 @@ class Md2ref(unittest.TestCase):
         got = ask(compile_doc('doc'), 'search', ['frobs', 'converts']).splitlines()
         self.assertEqual(got, ['1 3:0:1', '1 4:0:1'])
 
+    def test_which_text_makes_words(self):
+        # Three letters or more of a-z, 0-9, _ and $, lower-cased, less the
+        # stop words, all-digit runs, and runs of only _ and $: here doc
+        # (the title), words, $ff, x86, upper, x_1, 9_9 and $12.
+        p, data, left = compile_pages({'index.md': '# Doc\n\nWords: 1234 $$$ ___ $_$ $ff x86 _x zz '
+                                                   'Through UPPER further the x_1 9_9 $12.\n'})
+        self.assertEqual(p.returncode, 0, p.stdout)
+        self.assertIn('words 8\n', ask(data, 'info'))
+        self.assertEqual(ask(data, 'search', ['upper', 'x86']).splitlines(),
+                         ['1 0:0:1', '1 0:0:1'])
+
     def test_blocks_render(self):
         text = ask(compile_doc('doc'), 'layout', (), '76')
         for want in ('1. Install it.', '   myprog -v', '  - nested strong',
