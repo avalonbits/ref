@@ -5,6 +5,7 @@
  */
 #include <string.h>
 
+#include "script.h"
 #include "ui.h"
 
 #define MAX_ROWS  160
@@ -80,9 +81,7 @@ static void draw_row(int first, int r, int input)
 
 static void log_state(void)
 {
-#ifdef REF_SCRIPT
-    script_log("pick row %d of %d top %d query '%s'", cursor, nrows, top, query);
-#endif
+    LOG("pick row %d of %d top %d query '%s'", cursor, nrows, top, query);
 }
 
 static void draw(const char* heading, int first, int input)
@@ -256,7 +255,7 @@ static int choose_at(const char* heading, int at, int at_top)
     }
 }
 
-int pick_topics(const char* heading, const ref_match* m, int n, int labels)
+int pick_topics(const char* heading, const ref_match* m, int n, int all, int labels)
 {
     int i;
 
@@ -266,12 +265,12 @@ int pick_topics(const char* heading, const ref_match* m, int n, int labels)
         rows[nrows].topic = m[i].topic;
         nrows++;
     }
-    total = n;
+    total = all;
 
     return choose(heading);
 }
 
-int pick_hits(const char* heading, const ref_hit* h, int n)
+int pick_hits(const char* heading, const ref_hit* h, int n, int all)
 {
     int i;
 
@@ -281,7 +280,7 @@ int pick_hits(const char* heading, const ref_hit* h, int n)
         rows[nrows].topic = h[i].topic;
         nrows++;
     }
-    total = n;
+    total = all;
 
     return choose(heading);
 }

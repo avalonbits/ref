@@ -19,6 +19,7 @@
 
 #include <agon/mos.h>
 
+#include "script.h"
 #include "ui.h"
 #include "version.h"
 
@@ -29,17 +30,30 @@
 #define NOTHING 100
 #define MATCHES 64
 #define HITS    100
-#define ARGS    200
+#define QUERY   200
 
 ref_file book;
 
+/* The command line. */
+static struct {
+    const char* path;
+    int keys_only;              /* -k */
+    int search_only;            /* -s */
+    int print;                  /* -p */
+    int time_it;                /* -T */
+    int version;                /* -v */
+    char query[QUERY + 1];      /* the rest, joined with spaces */
+} opt;
+
+/* What the query found: a lookup's matches, or a search's hits. */
+static int kind;                /* REF_LOOK_*; NONE with hits for a search */
+static int count;               /* how many are held, at most MATCHES or HITS */
+static int total;               /* how many there were */
 static ref_match matches[MATCHES];
 static ref_hit hits[HITS];
-static char args[ARGS + 1];
+
 static char line[200];
 static const uint8_t* titles;
-
-static const char DEFAULT_FILE[] = "/lib/ref/ref.dat";
 
 const char* ui_title_at(uint32_t off)
 {
@@ -66,468 +80,196 @@ const char* ui_title(unsigned topic)
     return ui_title_at(t.title);
 }
 
-static void out(const char* s)
-{
-    while (*s) {
-        if (*s == '\n') {
-            putch('\r');
-        }
-        putch(*s++);
-    }
-}
-
-void ui_message(const char* text)
-{
-    scr_cls();
-    scr_begin(scr_rows / 2);
-    scr_colour(C_TEXT);
-    scr_adds("  ");
-    scr_adds(text);
-    scr_end();
-    scr_begin(scr_rows);
-    scr_colour(C_STATUS);
-    scr_adds(" Press a key");
-    scr_end();
-#ifdef REF_SCRIPT
-    script_log("message %s", text);
-#endif
-    in_wait();
-}
-
-static const char* const HELP[] = {
-    "ref -- the Agon documentation",
-    "",
-    "Reading a topic: the cursor",
-    "  Arrows                       move it; the screen follows",
-    "  PgUp PgDn Home End           by the page, or to either end",
-    "  Ctrl+Up  Ctrl+Down           to the previous or next heading",
-    "  Ctrl+Left  Ctrl+Right        to the previous or next link (Tab too)",
-    "  Enter                        follow the link under it",
-    "  Ctrl+F                       find words on the screen and on",
-    "  Ctrl+N  Ctrl+P               the next or previous match",
-    "  Backspace  Alt+Left          back: to the link you followed, or to",
-    "                               the contents, list or find it came from",
-    "  Alt+Right                    forward",
-    "  n  p                         the next or previous topic",
-    "  u                            the section the topic is in",
-    "  t                            the contents",
-    "  /  F3                        find: type to narrow the list",
-    "  Esc  q                       quit",
-    "",
-    "From the command line",
-    "  ref                          the contents",
-    "  ref <query>                  look it up: vdu 23 27 3, mos_fopen, cd",
-    "  ref -k <query>               look it up, and nothing else",
-    "  ref -s <words>               search the text",
-    NULL,
-};
-
-void ui_help(void)
-{
-    int r;
-
-    scr_cls();
-    for (r = 0; HELP[r] && r < scr_rows; r++) {
-        scr_begin(r);
-        scr_colour(r == 0 || (HELP[r][0] && HELP[r][0] != ' ') ? C_HEAD : C_TEXT);
-        scr_adds(HELP[r]);
-        scr_end();
-    }
-    scr_begin(scr_rows);
-    scr_colour(C_STATUS);
-    scr_adds(" Press a key");
-    scr_end();
-#ifdef REF_SCRIPT
-    scr_dump("help");
-#endif
-    in_wait();
-}
-
-/* --- running the views ---------------------------------------------------------- */
-
-/* Between the views until the user quits: start at a topic, the contents
- * or find. from says where a starting topic came from (a list: GO_LIST),
- * so that Backspace can go back there. A view returns where to go next; a
- * topic's Backspace returns the view it was opened from, which is shown
- * again as it was left. */
-static void run(int go, int topic, const char* text, int from)
-{
-    int resume = 0;                 /* find, again as it was */
-
-    if (go == GO_VIEW && view_open_from((unsigned)topic, from) != 0) {
-        ui_message("That topic could not be read.");
-
-        return;
-    }
-    for (;;) {
-        int t;
-
-        switch (go) {
-        case GO_VIEW:
-            go = view_loop();
-            resume = go == GO_FIND && view_has();
-            break;
-        case GO_TOC:
-            t = toc_loop(view_current());
-            if (t >= 0) {
-                go = view_open_from((unsigned)t, GO_TOC) == 0 ? GO_VIEW : GO_TOC;
-            } else if (t == -2) {
-                go = GO_FIND;
-                resume = 0;
-            } else if (t == -3 || !view_has()) {
-                return;
-            } else {
-                go = GO_VIEW;
-            }
-            break;
-        case GO_FIND:
-            /* Fresh from / or F3 (text from the command line, or nothing);
-             * as it was left when Backspace comes back to it. */
-            t = pick_find(resume ? NULL : text ? text : "");
-            text = NULL;
-            resume = 0;
-            if (t >= 0) {
-                go = view_open_from((unsigned)t, GO_FIND) == 0 ? GO_VIEW : GO_FIND;
-            } else if (view_has()) {
-                go = GO_VIEW;
-            } else {
-                return;
-            }
-            break;
-        case GO_LIST:
-            t = pick_again();
-            if (t >= 0) {
-                go = view_open_from((unsigned)t, GO_LIST) == 0 ? GO_VIEW : GO_LIST;
-            } else if (view_has()) {
-                go = GO_VIEW;
-            } else {
-                return;
-            }
-            break;
-        default:
-            return;
-        }
-        if (go == GO_QUIT) {
-            return;
-        }
-    }
-}
-
-/* A chosen topic from a list, then the views from it. */
-static void run_pick(int t)
-{
-    if (t >= 0) {
-        run(GO_VIEW, t, NULL, GO_LIST);
-    }
-}
-
-/* --- printing ------------------------------------------------------------------- */
-
-static ref_line plines[2000];
-
-static void print_topic(unsigned num, int width)
-{
-    int n = ref_view(&book, num);
-    int nl;
-    int i;
-
-    if (n < 0) {
-        out("ref: that topic could not be read\n");
-
-        return;
-    }
-    nl = ref_layout(book.view, (unsigned)n, width, plines, 2000);
-    for (i = 0; i < nl && i < 2000; i++) {
-        const ref_line* ln = &plines[i];
-        unsigned k;
-        int x;
-
-        for (x = 0; x < ln->x && ln->kind; x++) {
-            putch(ln->note && x == ln->x - 2 ? '|' : ' ');
-        }
-        if (ln->kind == REF_RULE) {
-            for (; x < width; x++) {
-                putch('-');
-            }
-        }
-        for (k = ln->start; k < ln->end && ln->kind != REF_RULE; k = REF_SKIP(book.view, k)) {
-            if (book.view[k] >= 0x20) {
-                putch(book.view[k]);
-            }
-        }
-        out("\n");
-    }
-}
-
-static void print_list(const ref_match* m, int n, int labels)
+/* 0, or 1 if it printed the usage and ref should stop. */
+static int parse(int argc, char** argv)
 {
     int i;
 
-    for (i = 0; i < n && i < MATCHES; i++) {
-        if (labels) {
-            out(m[i].key);
-            out("  ");
-        }
-        out(ui_title(m[i].topic));
-        out("\n");
-    }
-}
-
-static void print_hits(int n)
-{
-    int i;
-
-    for (i = 0; i < n && i < HITS; i++) {
-        out(ui_title(hits[i].topic));
-        out("\n");
-    }
-}
-
-/* --- timing --------------------------------------------------------------------- */
-
-#define RUNS 10
-
-/* Centiseconds a run, to a tenth, from MOS's own clock. */
-static void report(const char* what, uint32_t start, const char* detail)
-{
-    uint32_t cs10 = (getsysvar_time() - start) * 10 / RUNS;
-
-    sprintf(line, "%-8s %lu.%lu cs  (%s, %d runs)\n", what, (unsigned long)(cs10 / 10),
-            (unsigned long)(cs10 % 10), detail, RUNS);
-    out(line);
-}
-
-static int timing(const char* path, const char* query)
-{
-    uint32_t t;
-    int i;
-    int count;
-    unsigned big = 0;
-    unsigned k;
-    ref_topic tp;
-    static char detail[80];
-
-    if (!query[0]) {
-        query = "vdu 23 27 3";
-    }
-    t = getsysvar_time();
-    for (i = 0; i < RUNS; i++) {
-        ref_close(&book);
-        if (ref_open(&book, path) != REF_OK) {
-            return NOTHING;
-        }
-    }
-    report("open", t, "header, topics and directories");
-    t = getsysvar_time();
-    for (i = 0; i < RUNS; i++) {
-        ref_lookup(&book, query, matches, MATCHES, &count);
-    }
-    report("lookup", t, query);
-    t = getsysvar_time();
-    for (i = 0; i < RUNS; i++) {
-        ref_search(&book, "sprite", hits, HITS);
-    }
-    report("search", t, "sprite");
-    t = getsysvar_time();
-    for (i = 0; i < RUNS; i++) {
-        ref_keys_from(&book, "vdu 23", matches, MATCHES);
-    }
-    report("keys", t, "keys from vdu 23");
-    for (k = 0; k < book.ntopics; k++) {
-        unsigned bigsize;
-
-        ref_get_topic(&book, big, &tp);
-        bigsize = tp.length;
-        ref_get_topic(&book, k, &tp);
-        if (tp.length > bigsize) {
-            big = k;
-        }
-    }
-    t = getsysvar_time();
-    for (i = 0; i < RUNS; i++) {
-        ref_view(&book, big);
-    }
-    sprintf(detail, "topic %u, the largest, read and decompressed", big);
-    report("read", t, detail);
-    t = getsysvar_time();
-    for (i = 0; i < RUNS; i++) {
-        int n = ref_view(&book, big);
-
-        ref_layout(book.view, (unsigned)n, 79, plines, 2000);
-    }
-    sprintf(detail, "topic %u, the largest, read and laid out", big);
-    report("view", t, detail);
-
-    return 0;
-}
-
-/* --- the command line ------------------------------------------------------------ */
-
-static int ref_main(int argc, char** argv);
-
-int main(int argc, char** argv)
-{
-    int e = ref_main(argc, argv);
-
-#ifdef ZMALLOC
-    z_report();             /* the heap's peak: make heap */
-#endif
-
-#ifdef REF_SCRIPT
-    script_log("exit %d", e);
-    script_close();
-#endif
-
-    return e;
-}
-
-static int ref_main(int argc, char** argv)
-{
-    const char* path = DEFAULT_FILE;
-    int keys_only = 0;
-    int search_only = 0;
-    int print = 0;
-    int time_it = 0;
-    int version = 0;
-    int i;
-    int e;
-    int count;
-    int kind;
-    int width;
-
-    args[0] = 0;
+    opt.path = "/lib/ref/ref.dat";
     for (i = 1; i < argc; i++) {
         const char* a = argv[i];
 
         if (strcmp(a, "-k") == 0) {
-            keys_only = 1;
+            opt.keys_only = 1;
         } else if (strcmp(a, "-s") == 0) {
-            search_only = 1;
+            opt.search_only = 1;
         } else if (strcmp(a, "-p") == 0) {
-            print = 1;
+            opt.print = 1;
         } else if (strcmp(a, "-T") == 0) {
-            time_it = 1;
+            opt.time_it = 1;
         } else if (strcmp(a, "-v") == 0) {
-            version = 1;
+            opt.version = 1;
         } else if (strcmp(a, "-f") == 0 && i + 1 < argc) {
-            path = argv[++i];
+            opt.path = argv[++i];
         } else if (strcmp(a, "-h") == 0 || strcmp(a, "--help") == 0) {
-            out("usage: ref [-k | -s] [-p] [-v] [-f file] [query]\n");
+            ui_print("usage: ref [-k | -s] [-p] [-v] [-f file] [query]\n");
 
-            return 0;
-        } else if (strlen(args) + strlen(a) + 2 < ARGS) {
-            if (args[0]) {
-                strcat(args, " ");
+            return 1;
+        } else if (strlen(opt.query) + strlen(a) + 2 < QUERY) {
+            if (opt.query[0]) {
+                strcat(opt.query, " ");
             }
-            strcat(args, a);
+            strcat(opt.query, a);
         }
     }
+
+    return 0;
+}
+
+static int open_book(void)
+{
+    int e;
 
 #ifdef ZMALLOC
     z_site = "ref_open: tables, buffers";
 #endif
-    e = ref_open(&book, path);
-#ifdef REF_SCRIPT
-    if (e == REF_OK) {
-        static char norm[REF_KEY_MAX + 1];
-
-        ref_normalize(&book, args, norm);
-        script_log("args '%s' normalised '%s'", args, norm);
-    }
-#endif
+    e = ref_open(&book, opt.path);
     if (e != REF_OK) {
-        sprintf(line, "ref: cannot read %s%s\n", path,
+        sprintf(line, "ref: cannot read %s%s\n", opt.path,
                 e == REF_ENOFILE ? "" : e == REF_EVERSION ? ": a newer format than this ref"
                 : e == REF_ENOMEM ? ": not enough memory" : ": not a ref.dat");
-        out(line);
+        ui_print(line);
 
-        return NOTHING;
+        return -1;
     }
-    if (version) {
-        sprintf(line, "ref %s, agon-docs %s (%s)\n", REF_VERSION, book.commit, book.date);
-        out(line);
-        ref_close(&book);
+#ifdef REF_SCRIPT
+    {
+        static char norm[REF_KEY_MAX + 1];
 
-        return 0;
+        ref_normalize(&book, opt.query, norm);
+        LOG("args '%s' normalised '%s'", opt.query, norm);
     }
+#endif
 #ifdef ZMALLOC
     z_site = "the titles";
 #endif
     titles = ref_titles(&book);
-    if (time_it) {
-        e = timing(path, args);
-        ref_close(&book);
 
-        return e;
+    return 0;
+}
+
+/* Look the query up -- then, unless -k, search for it if no key matches.
+ * 0, or -1 if nothing was found (and ref said so). */
+static int look_up(void)
+{
+    kind = REF_LOOK_NONE;
+    count = 0;
+    if (!opt.search_only) {
+        kind = ref_lookup(&book, opt.query, matches, MATCHES, &count);
+        total = count;
+        if (count > MATCHES) {
+            count = MATCHES;
+        }
     }
-    width = getsysvar_scrCols() - 1;
+    if (kind == REF_LOOK_NONE && !opt.keys_only) {
+        count = ref_search(&book, opt.query, hits, HITS);
+        total = count;
+        if (count > HITS) {
+            count = HITS;
+        }
+    }
+    if (count == 0) {
+        sprintf(line, "ref: nothing for %.60s\n", opt.query);
+        ui_print(line);
+
+        return -1;
+    }
+
+    return 0;
+}
+
+/* One topic found, rather than several to choose from. */
+static int one_topic(void)
+{
+    return kind != REF_LOOK_NONE && kind != REF_LOOK_LIST && count == 1;
+}
+
+static void print_found(void)
+{
+    int width = getsysvar_scrCols() - 1;
+
     if (width < 19) {
         width = 79;
     }
-
-    /* What the command line asks for, before anything is drawn. */
-    kind = REF_LOOK_NONE;
-    count = 0;
-    if (args[0] && !search_only) {
-        kind = ref_lookup(&book, args, matches, MATCHES, &count);
+    if (one_topic()) {
+        batch_print_topic(matches[0].topic, width);
+    } else if (kind == REF_LOOK_NONE) {
+        batch_print_hits(hits, count);
+    } else {
+        batch_print_matches(matches, count);
     }
-    if (args[0] && kind == REF_LOOK_NONE && keys_only) {
-        sprintf(line, "ref: nothing for %.60s\n", args);
-        out(line);
-        ref_close(&book);
+}
 
-        return NOTHING;
+static void show_found(void)
+{
+    static char book_title[REF_TITLE_MAX + 1];
+    int t;
+
+    if (ref_book_title(&book, book_title, sizeof book_title) < 0) {
+        strcpy(book_title, "Agon documentation");
     }
-    if (args[0] && kind == REF_LOOK_NONE) {
-        count = ref_search(&book, args, hits, HITS);
-        if (count == 0) {
-            sprintf(line, "ref: nothing for %.60s\n", args);
-            out(line);
-            ref_close(&book);
-
-            return NOTHING;
-        }
-    }
-
-    if (print) {
-        if (!args[0]) {
-            out("ref: -p needs a query\n");
-        } else if (kind == REF_LOOK_NONE) {
-            print_hits(count);
-        } else if (count == 1 && kind != REF_LOOK_LIST) {
-            print_topic(matches[0].topic, width);
-        } else {
-            print_list(matches, count, 1);
-        }
-        ref_close(&book);
-
-        return args[0] ? 0 : NOTHING;
-    }
-
-    {
-        static char book_title[REF_TITLE_MAX + 1];
-
-        if (ref_book_title(&book, book_title, sizeof book_title) < 0) {
-            strcpy(book_title, "Agon documentation");
-        }
-        scr_set_header(book_title);
-    }
+    scr_set_header(book_title);
     scr_open();
     in_open();
-    if (!args[0]) {
-        run(GO_TOC, -1, NULL, 0);
-    } else if (kind == REF_LOOK_NONE) {
-        sprintf(line, "Search: %.50s", args);
-        run_pick(pick_hits(line, hits, count));
-    } else if (count == 1 && kind != REF_LOOK_LIST) {
-        run(GO_VIEW, matches[0].topic, NULL, 0);
+    if (!opt.query[0]) {
+        nav_run(GO_TOC, -1, NULL, 0);
+    } else if (one_topic()) {
+        nav_run(GO_VIEW, matches[0].topic, NULL, 0);
     } else {
-        sprintf(line, "%d topics for %.50s", count, args);
-        run_pick(pick_topics(line, matches, count < MATCHES ? count : MATCHES, 1));
+        if (kind == REF_LOOK_NONE) {
+            sprintf(line, "Search: %.50s", opt.query);
+            t = pick_hits(line, hits, count, total);
+        } else {
+            sprintf(line, "%d topics for %.50s", total, opt.query);
+            t = pick_topics(line, matches, count, total, 1);
+        }
+        if (t >= 0) {
+            nav_run(GO_VIEW, t, NULL, GO_LIST);
+        }
     }
     in_close();
     scr_close();
+}
+
+static int run(int argc, char** argv)
+{
+    int result = 0;
+
+    if (parse(argc, argv)) {
+        return 0;
+    }
+    if (open_book() != 0) {
+        return NOTHING;
+    }
+    if (opt.version) {
+        sprintf(line, "ref %s, agon-docs %s (%s)\n", REF_VERSION, book.commit, book.date);
+        ui_print(line);
+    } else if (opt.time_it) {
+        result = batch_time(opt.path, opt.query) == 0 ? 0 : NOTHING;
+    } else if (opt.print && !opt.query[0]) {
+        ui_print("ref: -p needs a query\n");
+        result = NOTHING;
+    } else if (opt.query[0] && look_up() != 0) {
+        result = NOTHING;
+    } else if (opt.print) {
+        print_found();
+    } else {
+        show_found();
+    }
     ref_close(&book);
 
-    return 0;
+    return result;
+}
+
+int main(int argc, char** argv)
+{
+    int e = run(argc, argv);
+
+#ifdef ZMALLOC
+    z_report();             /* the heap's peak: make agon-heap */
+#endif
+    LOG("exit %d", e);
+    SCRIPTED(script_close());
+
+    return e;
 }

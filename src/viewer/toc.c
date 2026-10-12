@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "script.h"
 #include "ui.h"
 
 #ifdef ZMALLOC
@@ -168,9 +169,7 @@ static void draw_row(int r)
 
 static void log_state(void)
 {
-#ifdef REF_SCRIPT
-    script_log("toc row %d node %d top %d rows %d", cursor, nrows ? rows[cursor] : -1, top, nrows);
-#endif
+    LOG("toc row %d node %d top %d rows %d", cursor, nrows ? rows[cursor] : -1, top, nrows);
 }
 
 static void draw(void)
@@ -222,7 +221,7 @@ int toc_loop(int topic)
     if (load() != 0) {
         ui_message("The contents could not be read.");
 
-        return -1;
+        return TOC_BACK;
     }
     top = 0;
     cursor = 0;
@@ -288,18 +287,18 @@ int toc_loop(int topic)
             shape = 1;
             break;
         case K_FIND:
-            return -2;
+            return TOC_FIND;
         case K_ESC:
-            return -1;
+            return TOC_BACK;
         case K_CHAR:
             if (k.ch == 'q') {
-                return -3;
+                return TOC_QUIT;
             }
             if (k.ch == '/') {
-                return -2;
+                return TOC_FIND;
             }
             if (k.ch == 't' || k.ch == 'c') {
-                return -1;
+                return TOC_BACK;
             }
             break;
         }
