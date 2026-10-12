@@ -36,7 +36,7 @@ if [ ! -x "$EMU/agon-cli-emulator" ]; then
     exit 0
 fi
 make -s -C "$ROOT" dat host > /dev/null || { echo "FAIL  build"; exit 1; }
-DAT=$ROOT/out/ref.dat
+DAT=$ROOT/out/mos.dat
 TOOL=$ROOT/out/host/reftool
 
 # The inputs: every key, every title, and words and prefixes to search for.
@@ -111,10 +111,10 @@ on_agon() {
     for m in $MODES; do
         case $m in
             norm|lookup|search|from)
-                printf 'reftool /lib/ref/ref.dat %s -i /q/%s.txt -o /o/%s.txt\r\n' "$m" "$m" "$m" ;;
-            info|titles|contents) printf 'reftool /lib/ref/ref.dat %s -o /o/%s.txt\r\n' "$m" "$m" ;;
-            views) printf 'reftool /lib/ref/ref.dat views -o /o/views.bin\r\n' ;;
-            layout*) printf 'reftool /lib/ref/ref.dat layout %s -o /o/%s.txt\r\n' "${m#layout}" "$m" ;;
+                printf 'reftool /config/ref/docs/mos.dat %s -i /q/%s.txt -o /o/%s.txt\r\n' "$m" "$m" "$m" ;;
+            info|titles|contents) printf 'reftool /config/ref/docs/mos.dat %s -o /o/%s.txt\r\n' "$m" "$m" ;;
+            views) printf 'reftool /config/ref/docs/mos.dat views -o /o/views.bin\r\n' ;;
+            layout*) printf 'reftool /config/ref/docs/mos.dat layout %s -o /o/%s.txt\r\n' "${m#layout}" "$m" ;;
         esac
     done > "$sd/autoexec.txt"
     emu_run "$sd" 1200 > "$SCRATCH/$name.console"

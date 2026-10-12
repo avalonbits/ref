@@ -29,6 +29,15 @@ static int nrows;
 static int cursor;                  /* a row */
 static int top;
 
+void toc_reset(void)
+{
+    free(nodes);
+    free(rows);
+    nodes = NULL;
+    rows = NULL;
+    nrows = 0;
+}
+
 static int load(void)
 {
     unsigned k;

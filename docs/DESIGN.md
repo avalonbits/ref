@@ -1,22 +1,25 @@
 # How ref works
 
-ref has two halves. A **builder**, in Python on a PC or Mac, compiles the
-wiki into one file, `ref.dat`. A **viewer**, in C on the Agon, reads that
-file with seeks and shows it. Between them is the file format, and on the
-Agon side a portable **reader core** that knows the format.
+ref reads documents: one file each, in the format specified in
+[FORMAT.md](FORMAT.md), installed as `/config/ref/docs/<name>.dat`. ref has
+two halves. A **builder**, in Python on a PC or Mac, compiles agon-docs
+into one, `mos.dat`. A **viewer**, in C on the Agon, reads documents with
+seeks and shows them. Between them is the format, and on the Agon side a
+portable **reader core** that knows it. Any other tool can write the format
+too.
 
     agon-docs (Markdown, at the commit in SOURCE)
         |
         |  build/refbuild      parse, split into topics, resolve links,
         v                      extract keys, render, compress, index
-    ref.dat (about 470 KB)
+    mos.dat (about 470 KB)
         |
         |  src/core            open, decompress, look up, search, lay out
         v
     src/viewer -> the screen
 
 The Agon has 512 KB and the wiki is 700 KB of text, so nothing is loaded
-whole: ref.dat is read a topic, a key block or a word block at a time.
+whole: a document is read a topic, a key block or a word block at a time.
 
 ## The builder
 
@@ -94,8 +97,8 @@ words they contain, then in book order.
 
 **The file.** [`refdat.py`](../build/refbuild/refdat.py) compresses each
 topic as an LZ4 block ([`lz4.py`](../build/refbuild/lz4.py)) whose matches
-may reach into an 8 KB dictionary of strings common to many topics. It then
-writes the file and documents every byte of it in its docstring:
+may reach into an 8 KB dictionary of strings common to many topics, and
+writes the file. [FORMAT.md](FORMAT.md) specifies every byte; in short:
 
 | Section | Holds |
 |---|---|
@@ -115,11 +118,12 @@ lists the contents, the keys, the gaps and the sizes.
 
 ## The reader core
 
-[`src/core`](../src/core) is portable C (stdio, string and stdlib only).
+[`src/core`](../src/core) is portable C (stdio, string and stdlib only),
+and knows one document at a time.
 It builds for the Agon with agondev and with acc, and on a PC for the
 tests. [`refcore.h`](../src/core/refcore.h) is its API.
 
-- [`refcore.c`](../src/core/refcore.c) opens ref.dat. It reads the header,
+- [`refcore.c`](../src/core/refcore.c) opens a document. It reads the header,
   checks the sections fit together, and loads the small tables (topics,
   directories, settings, dictionary). It decompresses a topic and the
   topics shown with it into one view buffer, and its LZ4 decoder lets
@@ -147,11 +151,17 @@ which [`test/frames.sh`](../test/frames.sh) enforces.
 [`src/viewer`](../src/viewer), built by agondev
 ([`agon.mk`](../agon.mk)). [`ui.h`](../src/viewer/ui.h) lists the parts.
 
-- [`main.c`](../src/viewer/main.c) parses the command line, opens the
-  book, looks the query up (searching if no key matches, unless `-k`) and
-  then prints, times or shows. It returns 0 when something was shown and
-  100 when nothing was, never 1, 4 or 5, which MOS reports as errors of
-  its own.
+- [`main.c`](../src/viewer/main.c) parses the command line: options
+  anywhere, the first other word the document, the rest the query. It
+  opens the document, looks the query up (searching if no key matches,
+  unless `-k`) and then prints, times or shows. Plain `ref` browses
+  instead. It returns 0 when something was shown and 100 when nothing
+  was, never 1, 4 or 5, which MOS reports as errors of its own.
+- [`shelf.c`](../src/viewer/shelf.c) finds the documents in
+  `/config/ref/docs`, reading the directory entry by entry, with each
+  document's title from its header, and shows them to choose from. Esc
+  from a document's contents, with no topic open, comes back here; the
+  views are reset before the next document opens.
 - [`nav.c`](../src/viewer/nav.c) moves between the views (a topic, the
   contents, a list, search) until the user quits. Each view returns where
   to go next.
@@ -173,7 +183,7 @@ which [`test/frames.sh`](../test/frames.sh) enforces.
   every spelling of a key to what it means.
 - [`screen.c`](../src/viewer/screen.c) draws.
 
-**The screen.** The top row is a header with the wiki's title, then the
+**The screen.** The top row is a header with the document's title, then the
 text rows inside a margin each side, then a status line. Each row is drawn
 whole and sent in one RST 18h call. Colours are chosen by role and mapped
 for 16-, 4- and 2-colour modes.
@@ -235,6 +245,6 @@ Every check has been confirmed to fail when the line it covers is broken.
 - **Speed**, in the emulator at the Agon's own speed: a lookup takes
   6-14 ms, a search about 40 ms, and opening the largest topic (24 KB of
   tables) under 200 ms. `ref -T` measures them on the machine.
-- **The license.** agon-docs has none yet, so ref.dat can't be published.
+- **The license.** agon-docs has none yet, so mos.dat can't be published.
   [`mkrelease.sh`](../mkrelease.sh) refuses to build a release until
   `REF_LICENSE_SETTLED=1` says the license is settled.

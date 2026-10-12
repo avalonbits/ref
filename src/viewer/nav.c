@@ -6,14 +6,14 @@
  */
 #include "ui.h"
 
-void nav_run(int go, int topic, const char* text, int from)
+int nav_run(int go, int topic, const char* text, int from)
 {
     int resume = 0;                 /* find, as it was left */
 
     if (go == GO_VIEW && view_open_from((unsigned)topic, from) != 0) {
         ui_message("That topic could not be read.");
 
-        return;
+        return GO_QUIT;
     }
     while (go != GO_QUIT) {
         int t;
@@ -31,8 +31,10 @@ void nav_run(int go, int topic, const char* text, int from)
             } else if (t == TOC_FIND) {
                 go = GO_FIND;
                 resume = 0;
-            } else if (t == TOC_QUIT || !view_has()) {
-                return;
+            } else if (t == TOC_QUIT) {
+                return GO_QUIT;
+            } else if (!view_has()) {
+                return GO_BACK;             /* Esc, with no topic to go back to */
             } else {
                 go = GO_VIEW;               /* TOC_BACK, to the topic */
             }
@@ -49,7 +51,7 @@ void nav_run(int go, int topic, const char* text, int from)
             } else if (view_has()) {
                 go = GO_VIEW;
             } else {
-                return;
+                return GO_QUIT;
             }
             break;
 
@@ -60,12 +62,14 @@ void nav_run(int go, int topic, const char* text, int from)
             } else if (view_has()) {
                 go = GO_VIEW;
             } else {
-                return;
+                return GO_QUIT;
             }
             break;
 
         default:
-            return;
+            return GO_QUIT;
         }
     }
+
+    return GO_QUIT;
 }

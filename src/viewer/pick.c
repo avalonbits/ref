@@ -215,6 +215,15 @@ static int choose(const char* heading)
     return choose_at(heading, 0, 0);
 }
 
+void pick_reset(void)
+{
+    nrows = 0;
+    list_n = 0;
+    query[0] = 0;
+    find_cursor = 0;
+    find_top = 0;
+}
+
 int pick_again(void)
 {
     if (list_n == 0) {

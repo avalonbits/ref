@@ -1,14 +1,17 @@
 /*
- * ref: the Agon documentation, on the Agon.
+ * ref: documentation on the Agon. Each document is a file in the format of
+ * docs/FORMAT.md, installed as /config/ref/docs/<name>.dat.
  *
- *   ref                     the contents
- *   ref <query>             a key lookup, then a search if nothing matches
- *   ref -k <query>          the key lookup only: what ade's F1 runs
- *   ref -s <words>          the full-text search
- *   ref -f <file>           another ref.dat (default /lib/ref/ref.dat)
- *   ref -p ...              print what was found, instead of showing it
- *   ref -T [query]          time a lookup, a search and the largest topic
- *   ref -v                  ref's version, and the agon-docs its ref.dat holds
+ *   ref                     the documents installed, to choose one
+ *   ref <doc>               a document's contents
+ *   ref <doc> <query>       a key lookup, then a search if nothing matches
+ *   ref <doc> -k <query>    the key lookup only: what ade's F1 runs
+ *   ref <doc> -s <words>    the full-text search
+ *   ref -f <file> ...       a document by its path, instead of its name
+ *   ref -p ...              print what was found instead of showing it;
+ *                           ref -p alone prints the documents
+ *   ref <doc> -T [query]    time a lookup, a search and the largest topic
+ *   ref -v [doc]            ref's version, and a document's source
  *
  * Returns 0 when a topic (or a list to choose one from) was shown, and 100
  * when nothing matched or nothing could be shown -- never 1, 4 or 5, which
@@ -36,7 +39,8 @@ ref_file book;
 
 /* The command line. */
 static struct {
-    const char* path;
+    const char* name;           /* the document, by name */
+    const char* path;           /* its file: -f, or from the name */
     int keys_only;              /* -k */
     int search_only;            /* -s */
     int print;                  /* -p */
@@ -80,12 +84,13 @@ const char* ui_title(unsigned topic)
     return ui_title_at(t.title);
 }
 
-/* 0, or 1 if it printed the usage and ref should stop. */
+/* 0, or 1 if it printed the usage and ref should stop. Options may come
+ * anywhere; the first other word is the document (unless -f named a file),
+ * and the rest is the query. */
 static int parse(int argc, char** argv)
 {
     int i;
 
-    opt.path = "/lib/ref/ref.dat";
     for (i = 1; i < argc; i++) {
         const char* a = argv[i];
 
@@ -102,9 +107,11 @@ static int parse(int argc, char** argv)
         } else if (strcmp(a, "-f") == 0 && i + 1 < argc) {
             opt.path = argv[++i];
         } else if (strcmp(a, "-h") == 0 || strcmp(a, "--help") == 0) {
-            ui_print("usage: ref [-k | -s] [-p] [-v] [-f file] [query]\n");
+            ui_print("usage: ref [<doc> [-k | -s] [query]] [-p] [-v] [-f file]\n");
 
             return 1;
+        } else if (!opt.name && !opt.path) {
+            opt.name = a;
         } else if (strlen(opt.query) + strlen(a) + 2 < QUERY) {
             if (opt.query[0]) {
                 strcat(opt.query, " ");
@@ -124,10 +131,16 @@ static int open_book(void)
     z_site = "ref_open: tables, buffers";
 #endif
     e = ref_open(&book, opt.path);
+    if (e == REF_ENOFILE && opt.name) {
+        sprintf(line, "ref: no document %.20s; ref lists them\n", opt.name);
+        ui_print(line);
+
+        return -1;
+    }
     if (e != REF_OK) {
         sprintf(line, "ref: cannot read %s%s\n", opt.path,
                 e == REF_ENOFILE ? "" : e == REF_EVERSION ? ": a newer format than this ref"
-                : e == REF_ENOMEM ? ": not enough memory" : ": not a ref.dat");
+                : e == REF_ENOMEM ? ": not enough memory" : ": not a ref document");
         ui_print(line);
 
         return -1;
@@ -200,35 +213,69 @@ static void print_found(void)
     }
 }
 
-static void show_found(void)
+/* The book open, shown from what the query found -- its contents, if there
+ * was no query. GO_QUIT, or GO_BACK to go back to the documents. */
+static int show_found(void)
 {
     static char book_title[REF_TITLE_MAX + 1];
     int t;
 
     if (ref_book_title(&book, book_title, sizeof book_title) < 0) {
-        strcpy(book_title, "Agon documentation");
+        strcpy(book_title, opt.name ? opt.name : opt.path);
     }
     scr_set_header(book_title);
+    if (!opt.query[0]) {
+        return nav_run(GO_TOC, -1, NULL, 0);
+    }
+    if (one_topic()) {
+        return nav_run(GO_VIEW, matches[0].topic, NULL, 0);
+    }
+    if (kind == REF_LOOK_NONE) {
+        sprintf(line, "Search: %.50s", opt.query);
+        t = pick_hits(line, hits, count, total);
+    } else {
+        sprintf(line, "%d topics for %.50s", total, opt.query);
+        t = pick_topics(line, matches, count, total, 1);
+    }
+
+    return t >= 0 ? nav_run(GO_VIEW, t, NULL, GO_LIST) : GO_QUIT;
+}
+
+/* Plain ref: the documents, to choose from, until the user quits; each
+ * opens at its contents, and Esc there comes back here. */
+static int browse(void)
+{
+    const char* name;
+
+    if (shelf_scan() == 0) {
+        sprintf(line, "ref: no documents in %s\n", SHELF_DIR);
+        ui_print(line);
+
+        return NOTHING;
+    }
     scr_open();
     in_open();
-    if (!opt.query[0]) {
-        nav_run(GO_TOC, -1, NULL, 0);
-    } else if (one_topic()) {
-        nav_run(GO_VIEW, matches[0].topic, NULL, 0);
-    } else {
-        if (kind == REF_LOOK_NONE) {
-            sprintf(line, "Search: %.50s", opt.query);
-            t = pick_hits(line, hits, count, total);
-        } else {
-            sprintf(line, "%d topics for %.50s", total, opt.query);
-            t = pick_topics(line, matches, count, total, 1);
+    while ((name = shelf_choose()) != NULL) {
+        int go;
+
+        opt.name = name;
+        opt.path = shelf_path(name);
+        if (open_book() != 0) {
+            break;
         }
-        if (t >= 0) {
-            nav_run(GO_VIEW, t, NULL, GO_LIST);
+        go = show_found();
+        ref_close(&book);
+        view_reset();
+        toc_reset();
+        pick_reset();
+        if (go == GO_QUIT) {
+            break;
         }
     }
     in_close();
     scr_close();
+
+    return 0;
 }
 
 static int run(int argc, char** argv)
@@ -238,11 +285,38 @@ static int run(int argc, char** argv)
     if (parse(argc, argv)) {
         return 0;
     }
+    if (!opt.name && !opt.path) {
+        if (opt.version) {
+            ui_print("ref " REF_VERSION "\n");
+
+            return 0;
+        }
+        if (opt.print) {
+            if (shelf_scan() == 0) {
+                return NOTHING;
+            }
+            shelf_print();
+
+            return 0;
+        }
+
+        return browse();
+    }
+    if (opt.name && !shelf_valid_name(opt.name)) {
+        sprintf(line, "ref: %.20s is not a document's name; ref lists them\n", opt.name);
+        ui_print(line);
+
+        return NOTHING;
+    }
+    if (!opt.path) {
+        opt.path = shelf_path(opt.name);
+    }
     if (open_book() != 0) {
         return NOTHING;
     }
     if (opt.version) {
-        sprintf(line, "ref %s, agon-docs %s (%s)\n", REF_VERSION, book.commit, book.date);
+        sprintf(line, "ref %s, %s: %s (%s)\n", REF_VERSION, opt.name ? opt.name : opt.path,
+                book.commit, book.date);
         ui_print(line);
     } else if (opt.time_it) {
         result = batch_time(opt.path, opt.query) == 0 ? 0 : NOTHING;
@@ -254,7 +328,11 @@ static int run(int argc, char** argv)
     } else if (opt.print) {
         print_found();
     } else {
+        scr_open();
+        in_open();
         show_found();
+        in_close();
+        scr_close();
     }
     ref_close(&book);
 

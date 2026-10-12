@@ -36,6 +36,31 @@ static char ftext[FIND_MAX + 1];    /* the last thing found, kept between topics
 static int mline = -1;              /* its match: the line, or -1 */
 static int mcol;                    /* and where on it, in characters */
 
+/* --- opening, and the history ---------------------------------------------------- */
+
+/* A place in the history: a topic and where the screen and cursor were --
+ * or, with topic REF_NONE, the view a topic was opened from (GO_TOC,
+ * GO_LIST, GO_FIND, in line). */
+typedef struct {
+    uint16_t topic;
+    uint16_t top;
+    uint16_t line;
+    uint8_t col;
+} place;
+
+static place back[HISTORY];
+static int nback;
+static place fwd[HISTORY];
+static int nfwd;
+
+void view_reset(void)
+{
+    cur = -1;
+    nback = 0;
+    nfwd = 0;
+    mline = -1;
+}
+
 int view_current(void)
 {
     return cur;
@@ -399,23 +424,6 @@ static void draw_moved(int was, int was_cl)
     place_cursor();
     log_view(d);
 }
-
-/* --- opening, and the history ---------------------------------------------------- */
-
-/* A place in the history: a topic and where the screen and cursor were --
- * or, with topic REF_NONE, the view a topic was opened from (GO_TOC,
- * GO_LIST, GO_FIND, in line). */
-typedef struct {
-    uint16_t topic;
-    uint16_t top;
-    uint16_t line;
-    uint8_t col;
-} place;
-
-static place back[HISTORY];
-static int nback;
-static place fwd[HISTORY];
-static int nfwd;
 
 static void push(place* stack, int* n, place p)
 {

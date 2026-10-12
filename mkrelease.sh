@@ -3,13 +3,13 @@
 #
 #   ref-<version>.zip           unzip at the root of the SD card:
 #       bin/ref.bin                 the viewer
-#       lib/ref/ref.dat             agon-docs at the commit in SOURCE
-#       lib/ref/VERSION             ref's version, the commit it was built
+#       config/ref/docs/mos.dat     agon-docs at the commit in SOURCE
+#       config/ref/docs/VERSION     ref's version, the commit it was built
 #                                   from, and the agon-docs commit
-#   ref-builder-<version>.zip   the builder, to make ref.dat on a PC or Mac:
+#   ref-builder-<version>.zip   the builder, to make mos.dat on a PC or Mac:
 #       SOURCE, build/
 #
-# ref.dat is the wiki's own text, and agon-docs has no license yet: do not
+# mos.dat is the wiki's own text, and agon-docs has no license yet: do not
 # publish the first zip until its maintainers have settled one. The script
 # refuses unless REF_LICENSE_SETTLED=1 says that has happened.
 #
@@ -18,7 +18,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 if [ "${REF_LICENSE_SETTLED:-}" != 1 ]; then
-    echo "mkrelease: agon-docs has no license yet; ref.dat cannot be released." >&2
+    echo "mkrelease: agon-docs has no license yet; mos.dat cannot be released." >&2
     echo "mkrelease: set REF_LICENSE_SETTLED=1 once its maintainers have settled one." >&2
 
     exit 1
@@ -38,10 +38,10 @@ DOCS=$(sed -n 's/^commit //p' SOURCE)
 
 STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
-mkdir -p "$STAGE/card/bin" "$STAGE/card/lib/ref" "$STAGE/builder"
+mkdir -p "$STAGE/card/bin" "$STAGE/card/config/ref/docs" "$STAGE/builder"
 cp bin/ref.bin "$STAGE/card/bin/"
-cp out/ref.dat "$STAGE/card/lib/ref/"
-printf 'ref %s\ncommit %s\nagon-docs %s\n' "$VERSION" "$COMMIT" "$DOCS" > "$STAGE/card/lib/ref/VERSION"
+cp out/mos.dat "$STAGE/card/config/ref/docs/"
+printf 'ref %s\ncommit %s\nagon-docs %s\n' "$VERSION" "$COMMIT" "$DOCS" > "$STAGE/card/config/ref/docs/VERSION"
 cp -r SOURCE build "$STAGE/builder/"
 rm -rf "$STAGE/builder/build/cache"
 find "$STAGE/builder" -name __pycache__ -prune -exec rm -rf {} +

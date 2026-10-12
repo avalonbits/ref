@@ -1,5 +1,5 @@
 /*
- * What ade's F1 does, and nothing else: run `ref -k <word>` through hub as a
+ * What ade's F1 does, and nothing else: run `ref mos -k <word>` through hub as a
  * user program, with this program as the frame's continuation, which prints
  * the result hub hands back -- 0 when ref showed a topic, 100 when nothing
  * matched.
@@ -35,7 +35,7 @@ int main(int argc, char** argv)
         strcpy(cmd, argv[2]);
         i = 3;
     } else {
-        strcpy(cmd, "ref -k");
+        strcpy(cmd, "ref mos -k");
     }
     for (; i < argc; i++) {
         if (strlen(cmd) + strlen(argv[i]) + 2 > HUB_CMD_MAX) {

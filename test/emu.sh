@@ -5,7 +5,7 @@
 # the emulator stopped as soon as MOS prints its prompt after them.
 #
 # Source this; it defines:
-#   emu_card              a fresh card, with ref.bin and ref.dat installed;
+#   emu_card              a fresh card, with ref.bin and mos.dat installed;
 #                         prints its directory
 #   emu_run <card> <secs> [cli|full]
 #                         boot it, run autoexec.txt, print the console
@@ -14,15 +14,15 @@ MOS=${MOS:-$EMU/firmware/mos_platform.bin}     # MOS 3.0.2
 ROOT=${ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
 SCRATCH=${SCRATCH:-$(mktemp -d)}
 
-# emu_card [ref.bin] [ref.dat]
+# emu_card [ref.bin] [mos.dat]
 emu_card() {
-    local sd bin=${1:-$ROOT/bin/ref.bin} dat=${2:-$ROOT/out/ref.dat}
+    local sd bin=${1:-$ROOT/bin/ref.bin} dat=${2:-$ROOT/out/mos.dat}
     sd=$(mktemp -d -p "$SCRATCH")
     cp -r "$EMU/sdcard/mos" "$sd/"
     cp "$EMU/sdcard/MOS.bin" "$EMU/sdcard/firmware.bin" "$sd/"
-    mkdir -p "$sd/bin" "$sd/lib/ref"
+    mkdir -p "$sd/bin" "$sd/config/ref/docs"
     cp "$bin" "$sd/bin/ref.bin"
-    cp "$dat" "$sd/lib/ref/ref.dat"
+    cp "$dat" "$sd/config/ref/docs/mos.dat"
     echo "$sd"
 }
 

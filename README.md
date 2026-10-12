@@ -1,57 +1,66 @@
 # ref
 
-ref puts the community Agon documentation,
-[agon-docs](https://github.com/AgonPlatform/agon-docs), on the Agon: the
-whole wiki in one file on the SD card, and a viewer to read it, follow its
-links and search it. It runs on the Agon Light, Light 2, Origins and
-Console8, under MOS 3.0.2.
+ref reads documentation on the Agon. Each document is one file on the SD
+card, and ref reads it, follows its links and searches it. The first is
+`mos`: the community Agon documentation,
+[agon-docs](https://github.com/AgonPlatform/agon-docs), the whole wiki in
+one file. ref runs on the Agon Light, Light 2, Origins and Console8, under
+MOS 3.0.2.
 
 ## Installing
 
-Copy two files to the SD card:
+Copy ref, and each document, to the SD card:
 
     /bin/ref.bin
-    /lib/ref/ref.dat
+    /config/ref/docs/mos.dat
+    /config/ref/docs/<name>.dat     any other document
 
-There is no release to download yet. ref.dat is the wiki's own text, and
+There is no release to download yet. mos.dat is the wiki's own text, and
 agon-docs has no license, so until its maintainers settle one, build
-ref.dat yourself for your own card (see [Building](#building)).
+mos.dat yourself for your own card (see [Building](#building)).
+
+A document's name is its file's, without `.dat`: one to eight lower-case
+letters and digits. Any project can ship its documentation as a document:
+[docs/FORMAT.md](docs/FORMAT.md) specifies the format.
 
 ## Looking things up
 
-    ref                     the contents, organised as the wiki is
-    ref <query>             look it up; search the text if nothing matches
-    ref -k <query>          look it up, and nothing else
-    ref -s <words>          search the text
-    ref -p <query>          print what was found instead of showing it
-    ref -f <file>           read another ref.dat
-    ref -v                  ref's version, and the agon-docs commit it holds
+    ref                     the documents on the card, to choose one
+    ref <doc>               a document's contents, organised as its source is
+    ref <doc> <query>       look it up; search the text if nothing matches
+    ref <doc> -k <query>    look it up, and nothing else
+    ref <doc> -s <words>    search the text
+    ref -p ...              print instead of showing: what was found, or,
+                            alone, the documents with their titles
+    ref -f <file> ...       a document by its path instead of its name
+    ref -v [doc]            ref's version, and a document's source
 
-A lookup knows:
+In `mos`, a lookup knows:
 
 | Ask for | Like |
 |---|---|
-| VDU sequences, numbers written any way MOS reads them | `ref vdu 23 27 3`, `ref 23,27,&21`, `ref vdu 23,0,&85,1,5,0` |
-| MOS API calls, by name or number | `ref mos_fopen`, `ref mos 0x0a` |
-| RST calls | `ref rst 08h`, `ref rst 8` |
-| C functions | `ref f_printf` |
-| star commands and their aliases | `ref cd`, `ref dir` |
-| system variables | `ref run$path`, `ref hotkey$1`, `ref sysvar_scrmode` |
-| PLOT codes | `ref plot 85`, `ref vdu 25 85` |
-| BBC BASIC keywords | `ref gcol` |
-| any word of a heading | `ref copper` |
+| VDU sequences, numbers written any way MOS reads them | `ref mos vdu 23 27 3`, `ref mos 23,27,&21` |
+| MOS API calls, by name or number | `ref mos mos_fopen`, `ref mos mos 0x0a` |
+| RST calls | `ref mos rst 08h`, `ref mos rst 8` |
+| C functions | `ref mos f_printf` |
+| star commands and their aliases | `ref mos cd`, `ref mos dir` |
+| system variables | `ref mos run$path`, `ref mos hotkey$1`, `ref mos sysvar_scrmode` |
+| PLOT codes | `ref mos plot 85`, `ref mos vdu 25 85` |
+| BBC BASIC keywords | `ref mos gcol` |
+| any word of a heading | `ref mos copper` |
 
 Case doesn't matter, and the parameters a command names before its number
-can be anything: `vdu 23 0 &a0 7; 6` finds buffered command 6 whichever
+can be anything: `ref mos vdu 23 0 &a0 7; 6` finds buffered command 6 whichever
 buffer it names. A lookup that finds one topic opens it; more than one, a
 list to choose from.
 
-ref returns 0 when it showed something and 100 when nothing matched, so a
-script can tell. ade's F1 runs `ref -k <word>` through hub this way.
+ref returns 0 when it showed something and 100 when nothing matched (or
+there is no such document), so a script can tell. ade's F1 runs
+`ref mos -k <word>` through hub this way.
 
 ## Reading
 
-The screen has the wiki's title across the top, the text in the middle, and
+The screen has the document's title across the top, the text in the middle, and
 a status line at the bottom saying where the topic sits in the wiki and how
 far down you are. Links are green and headings yellow.
 
@@ -71,7 +80,7 @@ heading under it is lit; anywhere else the text cursor shows where it is.
 | Ctrl+N, Ctrl+P | the next or previous match |
 | `n`, `p` | the next or previous topic in the wiki |
 | `u` | the section the topic is in |
-| `t` | the contents |
+| `t` | the contents (Esc there, with no topic open, goes back to the documents) |
 | `/`, F3 | search: each key typed narrows the list, matching keys first |
 | `?`, F1 | the keys |
 | Esc, `q` | quit |
@@ -83,11 +92,11 @@ ref uses the screen mode and font already in use; under hub, the prompt's.
 
 ## Building
 
-ref.dat is built on a PC or Mac with Python 3.11 or later, from agon-docs
+mos.dat is built on a PC or Mac with Python 3.11 or later, from agon-docs
 at the commit pinned in [`SOURCE`](SOURCE). ref.bin is built with
 [agondev](https://github.com/AgonPlatform/agondev).
 
-    make dat            fetch agon-docs and write out/ref.dat
+    make dat            fetch agon-docs and write out/mos.dat
     make agon           bin/ref.bin
     make test           the builder's tests, and the reader core on the PC
     make emu            ref in fab-agon-emulator

@@ -1,6 +1,6 @@
 # ref: the Agon documentation, on the Agon.
 #
-#   make dat         fetch agon-docs at the pinned commit, build out/ref.dat,
+#   make dat         fetch agon-docs at the pinned commit, build out/mos.dat,
 #                    and write out/report.txt
 #   make host        the reader core built for the PC: out/host/reftool
 #   make acc-core    the reader core compiled by acc, which must keep working

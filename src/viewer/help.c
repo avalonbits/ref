@@ -25,10 +25,11 @@ static const char* const HELP[] = {
     "  Esc  q                       quit",
     "",
     "From the command line",
-    "  ref                          the contents",
-    "  ref <query>                  look it up: vdu 23 27 3, mos_fopen, cd",
-    "  ref -k <query>               look it up, and nothing else",
-    "  ref -s <words>               search the text",
+    "  ref                          the documents on the card",
+    "  ref <doc>                    a document's contents",
+    "  ref <doc> <query>            look it up: ref mos vdu 23 27 3",
+    "  ref <doc> -k <query>         look it up, and nothing else",
+    "  ref <doc> -s <words>         search the text",
     NULL,
 };
 

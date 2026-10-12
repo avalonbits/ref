@@ -2,6 +2,7 @@
  * The viewer: what its parts share.
  *
  *   main.c     the command line: what it asks for, and what ref returns
+ *   shelf.c    the documents installed, and choosing one
  *   nav.c      moving between the views until the user quits
  *   view.c     a topic: the cursor, drawing, keys and history
  *   doc.c      the topic laid out into lines, and questions about it
@@ -19,6 +20,21 @@
 #include <stdint.h>
 
 #include "refcore.h"
+
+/* --- the documents ------------------------------------------------------------------ */
+
+#define SHELF_DIR "/config/ref/docs"
+
+/* Where document name is: SHELF_DIR/<name>.dat. */
+const char* shelf_path(const char* name);
+/* Is name a document's name: one to eight lower-case letters and digits? */
+int shelf_valid_name(const char* name);
+/* The documents installed, read: how many. */
+int shelf_scan(void);
+/* Each, one a line: its name and its title. */
+void shelf_print(void);
+/* The documents, to choose one from: its name, or NULL to quit. */
+const char* shelf_choose(void);
 
 /* --- the book ---------------------------------------------------------------------- */
 
@@ -146,8 +162,16 @@ enum { GO_QUIT, GO_VIEW, GO_TOC, GO_FIND, GO_LIST };
 
 /* Moving between the views, starting at one -- GO_VIEW with a topic
  * (opened from from, if a list), GO_TOC, GO_FIND with text -- until the
- * user quits. */
-void nav_run(int go, int topic, const char* text, int from);
+ * user leaves: GO_QUIT to quit, or GO_BACK, Esc from the contents with no
+ * topic shown, to go back to the documents. */
+#define GO_BACK 100
+int nav_run(int go, int topic, const char* text, int from);
+
+/* Forget the book's views -- a topic and its history, the contents, the
+ * lists -- before another book is opened. */
+void view_reset(void);
+void toc_reset(void);
+void pick_reset(void);
 
 /* The topic view. Opening a topic keeps the one shown in the history;
  * opened from another view (GO_TOC, GO_LIST, GO_FIND), the history keeps

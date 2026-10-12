@@ -1,67 +1,10 @@
-"""ref.dat: the book in one file, read with seeks, never loaded whole.
+"""A ref document: the book in one file, read with seeks, never loaded
+whole. docs/FORMAT.md is the specification of every byte this writes;
+RefDat at the end reads it back, for the tests.
 
-Every integer is little-endian. Offsets are from the start of the file
-unless said otherwise.
-
-header, 128 bytes
-     0  8  magic "AGONREF\\x1a"
-     8  2  format version (1)
-    10  2  flags: bit 0, the book has a title (at 104)
-    12 12  agon-docs commit, its first 12 hex digits
-    24 12  agon-docs commit date, YYYY-MM-DD, NUL-padded
-    36  2  topics            38  2  contents nodes
-    40  2  key blocks        42  2  word blocks
-    44  4  keys              48  4  words
-    52  4  nodes offset      56  4  topics offset
-    60  4  titles offset     64  4  text offset
-    68  4  keys offset       72  4  key directory offset
-    76  4  words offset      80  4  word directory offset
-    84  4  normalising settings offset
-    88  4  dictionary offset 92  2  dictionary length
-    94  2  view size: the most text a topic shows, with what is joined to it
-    96  2  the largest compressed topic
-    98  2  (0)
-   100  4  file size
-   104  4  the book's title (into titles): the wiki's own, mkdocs.yml's
-           site_name, when flag bit 0 says there is one
-   108 20  (0)
-
-nodes, 10 bytes each: the contents tree, node 0 the first at the top
-     title (u32, into titles), topic (u16, NONE for a nav section),
-     first child (u16), next sibling (u16); NONE = 0xFFFF
-
-topics, 16 bytes each, in book order
-     title (u32, into titles), text (u32, from the text offset),
-     compressed length (u16), length (u16), parent (u16 or NONE),
-     span (u16): how many topics after it are shown with it -- all its
-     descendants, when they fit in the view; else none, and its text ends
-     with links to its children
-
-titles: a length byte, then the title (at most 255 bytes)
-
-text: each topic's markup (refbuild/render.py), compressed on its own as
-     an LZ4 block whose matches may reach into the dictionary
-
-keys: blocks of KEY_BLOCK keys sorted by bytes, then by topic. Each key:
-     shared (u8: bytes in common with the key before; 0 first in a block),
-     rest length (u8), the rest, topic (u16)
-key directory: per block, its offset (u32, from the keys offset), then its
-     first key: a length byte and the key
-
-words: blocks of WORD_BLOCK words, sorted, front-coded as keys are, each
-     followed by its topics: a count (varint), then for each topic
-     varint(gap << 1 | in title), where gap is the topic number less the
-     one before (the first: the topic number)
-word directory: as the key directory
-
-normalising settings (refbuild/normalize.py):
-     count (u8), then each hex_after word: a length byte and the word;
-     count (u8), then each skip: its prefix (a length byte and the
-     normalised prefix), a count of units (u8), and the units (u8 each);
-     count (u8), then each stop word the full-text index leaves out (a
-     length byte and the word), sorted
-
-varint: seven bits a byte, low first, the top bit set on all but the last
+ref's builder writes agon-docs as mos.dat. The header's revision and date
+are the agon-docs commit's, and its title the wiki's own (mkdocs.yml's
+site_name).
 """
 
 import struct

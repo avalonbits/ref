@@ -3,14 +3,14 @@
  * makes of ref.dat, for build/tests/test_core.py to hold against the
  * builder's own answers.
  *
- *   reftool <ref.dat> info              counts and sizes
- *   reftool <ref.dat> norm              each line of stdin, normalised
- *   reftool <ref.dat> lookup            each line of stdin, looked up
- *   reftool <ref.dat> from              each line of stdin: the keys it starts
- *   reftool <ref.dat> search            each line of stdin, searched
- *   reftool <ref.dat> views             every topic's view: length, bytes
- *   reftool <ref.dat> layout <width>    every topic's view, laid out
- *   reftool <ref.dat> contents          the contents tree, depth first
+ *   reftool <document> info              counts and sizes
+ *   reftool <document> norm              each line of stdin, normalised
+ *   reftool <document> lookup            each line of stdin, looked up
+ *   reftool <document> from              each line of stdin: the keys it starts
+ *   reftool <document> search            each line of stdin, searched
+ *   reftool <document> views             every topic's view: length, bytes
+ *   reftool <document> layout <width>    every topic's view, laid out
+ *   reftool <document> contents          the contents tree, depth first
  *
  * -i <file> and -o <file>, after the mode, read and write files instead of
  * stdin and stdout: the same program, built for the Agon by agondev and by
@@ -125,7 +125,7 @@ int main(int argc, char** argv)
     unsigned k;
 
     if (argc < 3) {
-        fprintf(stderr, "usage: reftool <ref.dat> <mode>\n");
+        fprintf(stderr, "usage: reftool <document> <mode>\n");
 
         return 2;
     }

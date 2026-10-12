@@ -62,7 +62,7 @@ dump() {
 
 # --- the release build: printing, and exit codes ---
 sd=$(emu_card "$RELEASE")
-printf 'ref -p -k vdu 23 27 3\r\n' > "$sd/autoexec.txt"
+printf 'ref mos -p -k vdu 23 27 3\r\n' > "$sd/autoexec.txt"
 out=$(emu_run "$sd" 60)
 rm -rf "$sd"
 check "ref -p -k prints the topic" \
@@ -70,21 +70,21 @@ check "ref -p -k prints the topic" \
 check "  all of it" "$(has "$out" 'commands instead.')" yes
 
 sd=$(emu_card "$RELEASE")
-printf 'ref -v\r\n' > "$sd/autoexec.txt"
+printf 'ref -v mos\r\n' > "$sd/autoexec.txt"
 out=$(emu_run "$sd" 60)
 rm -rf "$sd"
 version=$(sed -n 's/^#define REF_VERSION "\(.*\)"/\1/p' "$ROOT/src/viewer/version.h")
 commit=$(sed -n 's/^commit \(.\{12\}\).*/\1/p' "$ROOT/SOURCE")
 check "ref -v says its version, and which agon-docs" \
-      "$(grep -a '^ref ' <<< "$out")" "ref $version, agon-docs $commit (2026-07-15)"
+      "$(grep -a '^ref ' <<< "$out")" "ref $version, mos: $commit (2026-07-15)"
 
 # Each command under Try, so autoexec carries on after a failure, and its
 # result shown. 0 when something was found, 100 when not; never 1, 4 or 5.
 sd=$(emu_card "$RELEASE")
 {
-    printf 'Try ref -p -k mos_fopen\r\nShow Try$ReturnCode\r\n'
-    printf 'Try ref -k xyzzy\r\nShow Try$ReturnCode\r\n'
-    printf 'Try ref -p xyzzy plugh\r\nShow Try$ReturnCode\r\n'
+    printf 'Try ref mos -p -k mos_fopen\r\nShow Try$ReturnCode\r\n'
+    printf 'Try ref mos -k xyzzy\r\nShow Try$ReturnCode\r\n'
+    printf 'Try ref mos -p xyzzy plugh\r\nShow Try$ReturnCode\r\n'
     printf 'Try ref -f /none.dat cd\r\nShow Try$ReturnCode\r\n'
 } > "$sd/autoexec.txt"
 out=$(emu_run "$sd" 60)
@@ -94,8 +94,46 @@ check "results: found 0; nothing, nothing searched, no file: 100" "$codes" "0 10
 check "  saying why when nothing matched" "$(has "$out" 'ref: nothing for xyzzy')" yes
 check "  and when there is no ref.dat" "$(has "$out" 'ref: cannot read /none.dat')" yes
 
+# --- the documents: a card with two, mos and a copy of it as zap, and a
+# file that is not one ---
+sd=$(emu_card "$RELEASE")
+cp "$sd/config/ref/docs/mos.dat" "$sd/config/ref/docs/zap.dat"
+printf 'not a document\r\n' > "$sd/config/ref/docs/notes.txt"
+{
+    printf 'ref -p\r\n'
+    printf 'Try ref nosuch cd\r\nShow Try$ReturnCode\r\n'
+    printf 'Try ref Bad! cd\r\nShow Try$ReturnCode\r\n'
+    printf 'Try ref -f /config/ref/docs/zap.dat -p -k cd\r\nShow Try$ReturnCode\r\n'
+} > "$sd/autoexec.txt"
+out=$(emu_run "$sd" 60)
+rm -rf "$sd"
+check "ref -p lists the documents in /config/ref/docs, by name, with their titles" \
+      "$(grep -a '  Community Agon' <<< "$out" | tr -s ' ' | tr '\n' ',')" \
+      "mos Community Agon Platform documentation,zap Community Agon Platform documentation,"
+check "  and nothing that is not a .dat file" "$(grep -ac '^notes ' <<< "$out")" 0
+check "  a document that is not there says so" "$(has "$out" 'ref: no document nosuch; ref lists them')" yes
+check "  as does a name that cannot be one" "$(has "$out" 'ref: Bad! is not a document')" yes
+check "  both return 100, and -f reads a document by its path" \
+      "$(grep -a 'Try$ReturnCode' <<< "$out" | grep -oE '[0-9]+$' | tr '\n' ' ')" "100 100 0 "
+check "  which found cd there" "$(grep -ac '^Change current directory\.$' <<< "$out")" 1
+
+sd=$(emu_card "$SCRIPTED")
+cp "$sd/config/ref/docs/mos.dat" "$sd/config/ref/docs/zap.dat"
+printf 'ref\r\n' > "$sd/autoexec.txt"
+printf '%s\n' dump:shelf enter esc down enter c:q > "$sd/ref.keys"
+emu_run "$sd" 60 > /dev/null
+t=$(tr -d '\r' < "$sd/ref.out")
+rm -rf "$sd"
+check "ref alone shows the documents to choose from" \
+      "$(dump "$t" shelf | head -2 | sed 's/ *$//' | tr -s ' ' | tr '\n' ',')" \
+      " mos Community Agon Platform documentation, zap Community Agon Platform documentation,"
+check "  Enter opens one at its contents, Esc comes back to the documents" \
+      "$(grep -E '^(shelf|toc) ' <<< "$t" | cut -d' ' -f1-4 | tr '\n' ',')" \
+      "shelf row 0 of,toc row 0 node,shelf row 0 of,shelf row 1 of,toc row 0 node,"
+check "  and q quits" "$(grep -c '^exit 0$' <<< "$t")" 1
+
 # --- a topic, its links and its history ---
-t=$(scripted "ref -k vdu 23 27 3" "dump:open
+t=$(scripted "ref mos -k vdu 23 27 3" "dump:open
 tab
 dump:tab
 enter
@@ -120,7 +158,7 @@ check "  Alt+Right goes forward again" "$(dump "$t" forward | head -1)" \
       "Bitmap plots (PLOT codes &E8-&EF)"
 
 # --- a hypertext: headings, links and finding with CTRL ---
-t=$(scripted "ref -k copper" "down
+t=$(scripted "ref mos -k copper" "down
 enter
 ctrl+down
 ctrl+down
@@ -132,7 +170,7 @@ check "Ctrl+Down puts the cursor on each heading in turn, at the top of the scre
       "$(grep -oE 'cur [0-9]+:0' <<< "$t" | sed -n '2,4p' | tr '\n' ' ')" "cur 34:0 cur 55:0 cur 57:0 "
 check "  the third is Command 0" "$(dump "$t" third | head -1)" "Command 0: Create a palette"
 check "  Ctrl+Up goes back to the one before" "$(grep -c 'top 55 lines 169 cur 55:0 scrolled -2$' <<< "$t")" 1
-t=$(scripted "ref -k VDU 23,0,&A0,1;6" "ctrl+right
+t=$(scripted "ref mos -k VDU 23,0,&A0,1;6" "ctrl+right
 ctrl+right
 ctrl+left
 ctrl+f
@@ -161,7 +199,7 @@ check "Ctrl+F finds words, spaces and all, and shows them" \
 check "  the match is on the screen" "$(dump "$t" found | grep -c 'buffer 12')" 2
 check "  Ctrl+N goes to the next, Ctrl+P back" \
       "$(grep -o "at [0-9]*:" <<< "$t" | tr '\n' ' ')" "at 87: at 91: at 87: "
-t2=$(scripted "ref -k VDU 23,0,&A0,1;6" "ctrl+f
+t2=$(scripted "ref mos -k VDU 23,0,&A0,1;6" "ctrl+f
 text:COMBINING THE ABOVE
 enter")
 check "  ignoring case: COMBINING THE ABOVE finds Combining the above" "$(grep -c "^find 'COMBINING THE ABOVE' at " <<< "$t2")" 1
@@ -169,7 +207,7 @@ check "  and a word that is not there says so" "$(dump "$t" notfound | grep -c '
 
 # A heading that wraps is lit whole, from whichever of its lines the cursor
 # is on, and moving off it leaves nothing lit behind.
-t=$(scripted "ref -k vdu 23 27 6" "dump:heading
+t=$(scripted "ref mos -k vdu 23 27 6" "dump:heading
 down
 dump:second
 down
@@ -182,7 +220,7 @@ check "  and off the heading, nothing stays lit" "$(grep '^lit off:' <<< "$t")" 
 # The FAQ's list of questions: links that wrap are lit whole, too.
 keys="end"; for i in $(seq 8); do keys="$keys
 ctrl+left"; done
-t=$(scripted "ref -k frequently" "$keys
+t=$(scripted "ref mos -k frequently" "$keys
 dump:wrapped
 down
 dump:tail
@@ -196,11 +234,11 @@ check "  from its second line too" "$(grep '^lit tail:' <<< "$t")" "lit tail: 11
 check "  and the next is lit whole when the cursor gets to it" "$(grep '^lit next:' <<< "$t")" "lit next: 13 14"
 check "  Ctrl+Left from a second line goes to the link before, not its own start" \
       "$(grep '^lit prev:' <<< "$t")" "lit prev: 10"
-t=$(scripted "ref -k vdu 23 27 3" "dump:one")
+t=$(scripted "ref mos -k vdu 23 27 3" "dump:one")
 check "the blank line after a lit heading is not lit" "$(grep '^lit one:' <<< "$t")" "lit one: 0"
 
 # --- scrolling a long topic ---
-t=$(scripted "ref -k VDU 23,0,&A0,1;6" "dump:top
+t=$(scripted "ref mos -k VDU 23,0,&A0,1;6" "dump:top
 pgdn
 dump:page
 end
@@ -214,7 +252,7 @@ check "  End shows the end, at 100%" "$(dump "$t" end | tail -1 | grep -oE '[0-9
 check "  Home the top again" "$(dump "$t" home | head -1)" "Command 6: Conditionally call a buffer"
 
 # --- several matches: a list ---
-t=$(scripted "ref mos_f" "dump:list
+t=$(scripted "ref mos mos_f" "dump:list
 down
 down
 enter
@@ -227,19 +265,19 @@ check "ref mos_f lists the keys that start with it" \
 check "  Enter opens the one chosen" "$(dump "$t" chosen | head -1)" "0x0C: mos_fgetc"
 
 # --- search ---
-t=$(scripted "ref -s sprite frame" "dump:results
+t=$(scripted "ref mos -s sprite frame" "dump:results
 enter
 dump:first")
 first=$(dump "$t" results | head -1 | sed 's/^ //; s/  - .*//')
 check "ref -s searches the text, titles first" "$first" "VDU 23, 27, 5: Clear frames in current sprite"
 check "  Enter opens the first" "$(dump "$t" first | head -1)" "VDU 23, 27, 5: Clear frames in current sprite"
-t=$(scripted "ref transparency" "dump:results")
+t=$(scripted "ref mos transparency" "dump:results")
 check "a lookup that finds no key searches the text instead" \
       "$(dump "$t" results | tail -1 | sed 's/ *$//')" " Search: transparency"
 check "  and lists what it found" "$(dump "$t" results | sed '$d' | grep -c '^ [A-Z]')" 3
 
 # --- the contents, and find as you type ---
-t=$(scripted "ref" "dump:contents
+t=$(scripted "ref mos" "dump:contents
 down
 down
 down
@@ -257,7 +295,7 @@ text:mos_fo
 dump:find
 enter
 dump:found")
-check "ref alone shows the contents, by the nav" \
+check "ref mos shows its contents, by the nav" \
       "$(dump "$t" contents | head -6 | sed 's/ *$//')" \
       "- Welcome & getting started
   + Start here
@@ -271,13 +309,13 @@ check "  / finds as you type: keys first" \
       "$(dump "$t" find | sed -n 2p | sed 's/ *$//')" " mos_fopen  0x0A: mos_fopen  - What is the MOS API"
 check "  Enter opens it" "$(dump "$t" found | head -1)" "0x0A: mos_fopen"
 
-t=$(scripted "ref -k mos_fopen" "c:t
+t=$(scripted "ref mos -k mos_fopen" "c:t
 dump:deep")
 check "t from a topic deep in a closed page opens its way to it" \
       "$(dump "$t" deep | grep -c '0x0A: mos_fopen')" 1
 
 # --- Backspace goes back to where a topic was opened from ---
-t=$(scripted "ref" "down
+t=$(scripted "ref mos" "down
 down
 down
 down
@@ -291,13 +329,13 @@ dump:start")
 check "Backspace from a topic opened from the contents goes back to them" \
       "$(grep -A1 '^back to contents$' <<< "$t" | grep -c '^toc row 8 ')" 1
 check "  the start page, as it was" "$(dump "$t" start | head -1 | sed 's/ *$//')" "- Welcome & getting started"
-t=$(scripted "ref mos_f" "down
+t=$(scripted "ref mos mos_f" "down
 down
 enter
 back")
 check "  from a list, to the list, on the row chosen" \
       "$(grep -A1 '^back to list$' <<< "$t" | grep -c '^pick row 2 of 9 ')" 1
-t=$(scripted "ref" "c:/
+t=$(scripted "ref mos" "c:/
 text:mos_fo
 down
 enter
@@ -306,7 +344,7 @@ check "  from find, to find, with what was typed" \
       "$(grep -A1 '^back to find$' <<< "$t" | grep -c "^pick row 1 of [0-9]* top 0 query 'mos_fo'$")" 1
 
 # --- help ---
-t=$(scripted "ref -k cd" "c:?
+t=$(scripted "ref mos -k cd" "c:?
 esc")
 check "? shows the keys" "$(dump "$t" help | sed -n 3p)" "Reading a topic: the cursor"
 
@@ -357,7 +395,7 @@ if [ -x "$EMU/fab-agon-emulator" ]; then
     for mode in 3 8 0; do
         if [ "$mode" = 8 ]; then margin=1; width=38; else margin=2; width=76; fi
         sd=$(emu_card "$SCRIPTED")
-        printf 'VDU 22 %s\r\nref -k vdu 23 27 3\r\n' "$mode" > "$sd/autoexec.txt"
+        printf 'VDU 22 %s\r\nref mos -k vdu 23 27 3\r\n' "$mode" > "$sd/autoexec.txt"
         printf 'tab\ndump:screen\nvdp:screen\nesc\n' > "$sd/ref.keys"
         emu_run "$sd" 300 full > /dev/null
         t=$(tr -d '\r' < "$sd/ref.out" 2>/dev/null)
@@ -378,7 +416,7 @@ if [ -x "$EMU/fab-agon-emulator" ]; then
     # last -- the bottom right, painted rather than printed in -- are in
     # its colour; a text row's edges, in the margins, are not.
     sd=$(emu_card "$SCRIPTED")
-    printf 'VDU 22 3\r\nref -k vdu 23 27 3\r\n' > "$sd/autoexec.txt"
+    printf 'VDU 22 3\r\nref mos -k vdu 23 27 3\r\n' > "$sd/autoexec.txt"
     printf '%s\n' pixel:0,29 pixel:79,29 pixel:0,5 pixel:79,5 pixel:0,0 pixel:79,0 vdp:top esc \
         > "$sd/ref.keys"
     emu_run "$sd" 300 full > /dev/null
@@ -397,7 +435,7 @@ if [ -x "$EMU/fab-agon-emulator" ]; then
     # them: the screen must still be what ref meant, in a topic, the
     # contents and a list.
     sd=$(emu_card "$SCRIPTED")
-    printf 'VDU 22 3\r\nref -k VDU 23,0,&A0,1;6\r\n' > "$sd/autoexec.txt"
+    printf 'VDU 22 3\r\nref mos -k VDU 23,0,&A0,1;6\r\n' > "$sd/autoexec.txt"
     { for i in $(seq 27); do echo down; done; } > "$sd/ref.keys"
     printf '%s\n' down down down dump:down vdp:down up dump:up vdp:up \
         c:t pgdn down down dump:toc vdp:toc esc \
@@ -422,7 +460,7 @@ fi
 # --- memory: the heap's peak, measured by zap's zmalloc shim ---
 make -s -C "$ROOT" agon-heap > /dev/null 2>&1
 sd=$(emu_card "$ROOT/bin/heap/ref.bin")
-printf 'ref -k vdu 23 27 3\r\n' > "$sd/autoexec.txt"
+printf 'ref mos -k vdu 23 27 3\r\n' > "$sd/autoexec.txt"
 # A topic, the contents, the largest topic through find, then a search.
 printf 'c:t\ndown\nright\nc:/\ntext:vdu variables\nenter\nend\nc:/\ntext:sprite\nenter\nesc\n' \
     > "$sd/ref.keys"
@@ -436,7 +474,7 @@ check "the heap's peak is under 100 KB" "$([ "${peak:-999999}" -lt 102400 ] && e
 
 # --- speed, in the machine ---
 sd=$(emu_card "$RELEASE")
-printf 'ref -T\r\n' > "$sd/autoexec.txt"
+printf 'ref mos -T\r\n' > "$sd/autoexec.txt"
 out=$(emu_run "$sd" 120 cli paced)
 rm -rf "$sd"
 grep -aE '^(open|lookup|search|keys|read|view) ' <<< "$out" | sed 's/^/TIME  /'
