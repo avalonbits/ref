@@ -167,8 +167,8 @@ enter")
 check "  ignoring case: COMBINING THE ABOVE finds Combining the above" "$(grep -c "^find 'COMBINING THE ABOVE' at " <<< "$t2")" 1
 check "  and a word that is not there says so" "$(dump "$t" notfound | grep -c '^ Not found: zzzz$')" 1
 
-# The cursor lights one line: a heading that wraps lights the line the
-# cursor is on, and moving off it leaves nothing lit behind.
+# A heading that wraps is lit whole, from whichever of its lines the cursor
+# is on, and moving off it leaves nothing lit behind.
 t=$(scripted "ref -k vdu 23 27 6" "dump:heading
 down
 dump:second
@@ -176,8 +176,8 @@ down
 down
 dump:off")
 check "a heading that wraps is two lines" "$(dump "$t" heading | sed -n 2p | grep -c '^buffer ID')" 1
-check "  the cursor on it lights only its line" "$(grep '^lit heading:' <<< "$t")" "lit heading: 0"
-check "  Down lights the second line instead" "$(grep '^lit second:' <<< "$t")" "lit second: 1"
+check "  the cursor on its first lights both" "$(grep '^lit heading:' <<< "$t")" "lit heading: 0 1"
+check "  and on its second" "$(grep '^lit second:' <<< "$t")" "lit second: 0 1"
 check "  and off the heading, nothing stays lit" "$(grep '^lit off:' <<< "$t")" "lit off:"
 t=$(scripted "ref -k vdu 23 27 3" "dump:one")
 check "the blank line after a lit heading is not lit" "$(grep '^lit one:' <<< "$t")" "lit one: 0"

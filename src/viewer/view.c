@@ -175,6 +175,37 @@ static int last_col(int i)
     return ln->x + (n > 0 ? n - 1 : 0);
 }
 
+/* The first and last lines of the heading line i is part of (a heading
+ * that wraps is several HEAD lines in a row), or -1 if it is not one. */
+static int heading_first(int i)
+{
+    if (i < 0 || i >= nlines || lines[i].kind != REF_HEAD) {
+        return -1;
+    }
+    while (i > 0 && lines[i - 1].kind == REF_HEAD) {
+        i--;
+    }
+
+    return i;
+}
+
+static int heading_last(int i)
+{
+    while (i + 1 < nlines && lines[i + 1].kind == REF_HEAD) {
+        i++;
+    }
+
+    return i;
+}
+
+/* Is line i part of the heading the cursor is on? */
+static int same_heading(int i, int c)
+{
+    int f = heading_first(c);
+
+    return f >= 0 && i >= f && i <= heading_last(f);
+}
+
 static int clamp_col(int i, int col)
 {
     int last = last_col(i);
@@ -272,11 +303,12 @@ static void draw_line(int row, int idx)
     if (idx == cl) {
         uint16_t target;
 
-        if (!link_at(cl, cc, &target, &lit_from, &lit_to) && ln->kind == REF_HEAD) {
-            lit_from = 0;                   /* the heading's line, all of it */
-            lit_to = 0x7fff;
-            head_lit = 1;
-        }
+        link_at(cl, cc, &target, &lit_from, &lit_to);
+    }
+    if (ln->kind == REF_HEAD && lit_from < 0 && same_heading(idx, cl)) {
+        lit_from = 0;                       /* a heading's lines, all of them */
+        lit_to = 0x7fff;
+        head_lit = 1;
     }
     skip = ln->kind == REF_PRE ? hscroll : 0;
     vis = 0;
@@ -453,6 +485,21 @@ static void draw(void)
 
 #define SCROLLED 2
 
+/* Line i, or all of the heading it is part of, where they are on the
+ * screen: what the cursor lights or stops lighting. */
+static void redraw_around(int i)
+{
+    int f = heading_first(i);
+    int l = f >= 0 ? heading_last(f) : i;
+    int j;
+
+    for (j = f >= 0 ? f : i; j <= l; j++) {
+        if (j >= top && j < top + scr_rows) {
+            draw_line(j - top, j);
+        }
+    }
+}
+
 /* After the cursor moved from line was_cl, and the text from line was: a
  * short move scrolls the rows on screen and draws only those that came into
  * view, and the two lines the cursor left and reached; a long one redraws. */
@@ -479,10 +526,8 @@ static void moved(int was, int was_cl)
         }
         draw_status();
     }
-    if (was_cl >= top && was_cl < top + scr_rows) {
-        draw_line(was_cl - top, was_cl);
-    }
-    draw_line(cl - top, cl);
+    redraw_around(was_cl);
+    redraw_around(cl);
     place_cursor();
     log_view(d);
 }
