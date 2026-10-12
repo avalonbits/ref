@@ -84,6 +84,11 @@ static void push(place* stack, int* n, place p)
 
 int view_open(unsigned num)
 {
+    return view_open_from(num, 0);
+}
+
+int view_open_from(unsigned num, int from)
+{
     if (cur >= 0) {
         place p;
 
@@ -91,6 +96,18 @@ int view_open(unsigned num)
         p.top = (uint16_t)top;
         p.line = (uint16_t)cl;
         p.col = (uint8_t)cc;
+        push(back, &nback, p);
+        nfwd = 0;
+    }
+    if (from) {
+        /* Where it was opened from: the contents, a list or find, which
+         * Backspace returns to. A mark, not a topic. */
+        place p;
+
+        p.topic = REF_NONE;
+        p.top = 0;
+        p.line = (uint16_t)from;
+        p.col = 0;
         push(back, &nback, p);
         nfwd = 0;
     }
@@ -902,6 +919,23 @@ int view_loop(void)
         }
         case K_BACK:
         case K_HISTBACK:
+            if (nback > 0 && back[nback - 1].topic == REF_NONE) {
+                /* Back to the view this topic was opened from; forward
+                 * comes here again. */
+                place here;
+                int to = back[--nback].line;
+
+                here.topic = (uint16_t)cur;
+                here.top = (uint16_t)top;
+                here.line = (uint16_t)cl;
+                here.col = (uint8_t)cc;
+                push(fwd, &nfwd, here);
+#ifdef REF_SCRIPT
+                script_log("back to %s", to == GO_TOC ? "contents" : to == GO_LIST ? "list" : "find");
+#endif
+
+                return to;
+            }
             redraw = history(back, &nback, fwd, &nfwd);
             break;
         case K_HISTFWD:

@@ -332,7 +332,9 @@ core at least).
   The link or heading line under the cursor is lit, that line alone;
   elsewhere the VDP's text cursor shows. Enter follows the link under the
   cursor, and the history keeps the cursor, so Backspace returns to the
-  link that was followed. (Each row starts in the text colour: a row that
+  link that was followed -- and, from a topic opened from the contents, a
+  list or find, to that view as it was left (the history holds a mark
+  for it), so the start page is always a Backspace away. (Each row starts in the text colour: a row that
   ended lit once lit the next row's padding, a second cyan bar that
   scrolling then left behind.) Ctrl+F finds words as aed does -- a prompt on the bottom row
   holding the last search, Enter to find, ignoring case, within a line,

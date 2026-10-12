@@ -105,7 +105,8 @@ static const char* const HELP[] = {
     "  Enter                        follow the link under it",
     "  Ctrl+F                       find words on the screen and on",
     "  Ctrl+N  Ctrl+P               the next or previous match",
-    "  Backspace  Alt+Left          back, to the link you followed",
+    "  Backspace  Alt+Left          back: to the link you followed, or to",
+    "                               the contents, list or find it came from",
     "  Alt+Right                    forward",
     "  n  p                         the next or previous topic",
     "  u                            the section the topic is in",
@@ -145,10 +146,15 @@ void ui_help(void)
 /* --- running the views ---------------------------------------------------------- */
 
 /* Between the views until the user quits: start at a topic, the contents
- * or find. */
-static void run(int go, int topic, const char* text)
+ * or find. from says where a starting topic came from (a list: GO_LIST),
+ * so that Backspace can go back there. A view returns where to go next; a
+ * topic's Backspace returns the view it was opened from, which is shown
+ * again as it was left. */
+static void run(int go, int topic, const char* text, int from)
 {
-    if (go == GO_VIEW && view_open((unsigned)topic) != 0) {
+    int resume = 0;                 /* find, again as it was */
+
+    if (go == GO_VIEW && view_open_from((unsigned)topic, from) != 0) {
         ui_message("That topic could not be read.");
 
         return;
@@ -159,13 +165,15 @@ static void run(int go, int topic, const char* text)
         switch (go) {
         case GO_VIEW:
             go = view_loop();
+            resume = go == GO_FIND && view_has();
             break;
         case GO_TOC:
             t = toc_loop(view_current());
             if (t >= 0) {
-                go = view_open((unsigned)t) == 0 ? GO_VIEW : GO_TOC;
+                go = view_open_from((unsigned)t, GO_TOC) == 0 ? GO_VIEW : GO_TOC;
             } else if (t == -2) {
                 go = GO_FIND;
+                resume = 0;
             } else if (t == -3 || !view_has()) {
                 return;
             } else {
@@ -173,10 +181,23 @@ static void run(int go, int topic, const char* text)
             }
             break;
         case GO_FIND:
-            t = pick_find(text);
+            /* Fresh from / or F3 (text from the command line, or nothing);
+             * as it was left when Backspace comes back to it. */
+            t = pick_find(resume ? NULL : text ? text : "");
             text = NULL;
+            resume = 0;
             if (t >= 0) {
-                go = view_open((unsigned)t) == 0 ? GO_VIEW : GO_FIND;
+                go = view_open_from((unsigned)t, GO_FIND) == 0 ? GO_VIEW : GO_FIND;
+            } else if (view_has()) {
+                go = GO_VIEW;
+            } else {
+                return;
+            }
+            break;
+        case GO_LIST:
+            t = pick_again();
+            if (t >= 0) {
+                go = view_open_from((unsigned)t, GO_LIST) == 0 ? GO_VIEW : GO_LIST;
             } else if (view_has()) {
                 go = GO_VIEW;
             } else {
@@ -196,7 +217,7 @@ static void run(int go, int topic, const char* text)
 static void run_pick(int t)
 {
     if (t >= 0) {
-        run(GO_VIEW, t, NULL);
+        run(GO_VIEW, t, NULL, GO_LIST);
     }
 }
 
@@ -486,12 +507,12 @@ static int ref_main(int argc, char** argv)
     scr_open();
     in_open();
     if (!args[0]) {
-        run(GO_TOC, -1, NULL);
+        run(GO_TOC, -1, NULL, 0);
     } else if (kind == REF_LOOK_NONE) {
         sprintf(line, "Search: %.50s", args);
         run_pick(pick_hits(line, hits, count));
     } else if (count == 1 && kind != REF_LOOK_LIST) {
-        run(GO_VIEW, matches[0].topic, NULL);
+        run(GO_VIEW, matches[0].topic, NULL, 0);
     } else {
         sprintf(line, "%d topics for %.50s", count, args);
         run_pick(pick_topics(line, matches, count < MATCHES ? count : MATCHES, 1));

@@ -50,7 +50,7 @@ heading under it is lit, and anywhere else the text cursor shows where it is.
 | Enter | follow the link under the cursor |
 | Ctrl+F | find words, from the top of the screen on, as aed finds |
 | Ctrl+N, Ctrl+P | the next or previous match |
-| Backspace, Alt+Left / Alt+Right | back, with the cursor on the link you followed / forward |
+| Backspace, Alt+Left / Alt+Right | back -- to the link you followed, or to the contents, list or find the topic was opened from -- / forward |
 | `n`, `p` | the next or previous topic |
 | `u` | the section the topic is in |
 | `t` | the contents |

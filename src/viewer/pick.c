@@ -194,10 +194,44 @@ static int move(int m, int shown)
     return 1;
 }
 
+/* The last list chosen from, kept for Backspace: find reuses rows. */
+static row list_rows[MAX_ROWS];
+static int list_n;
+static int list_total;
+static int list_cursor;
+static int list_top;
+static char list_heading[80];
+static int find_cursor;
+static int find_top;
+
+static int choose_at(const char* heading, int at, int at_top);
+
 static int choose(const char* heading)
 {
-    cursor = 0;
-    top = 0;
+    memcpy(list_rows, rows, (size_t)nrows * sizeof rows[0]);
+    list_n = nrows;
+    list_total = total;
+    strncpy(list_heading, heading, sizeof list_heading - 1);
+
+    return choose_at(heading, 0, 0);
+}
+
+int pick_again(void)
+{
+    if (list_n == 0) {
+        return -1;
+    }
+    memcpy(rows, list_rows, (size_t)list_n * sizeof rows[0]);
+    nrows = list_n;
+    total = list_total;
+
+    return choose_at(list_heading, list_cursor, list_top);
+}
+
+static int choose_at(const char* heading, int at, int at_top)
+{
+    cursor = at;
+    top = at_top;
     scr_cls();
     draw(heading, 0, 0);
     for (;;) {
@@ -211,6 +245,9 @@ static int choose(const char* heading)
             continue;
         }
         if (m == K_ENTER && nrows > 0) {
+            list_cursor = cursor;
+            list_top = top;
+
             return rows[cursor].topic;
         }
         if (m == K_ESC || (m == K_CHAR && k.ch == 'q')) {
@@ -293,11 +330,16 @@ int pick_find(const char* text)
     static const char HEADING[] = "Find   type to narrow   Enter: open   Esc: back";
     int len;
 
-    strncpy(query, text ? text : "", QUERY_MAX);
-    query[QUERY_MAX] = 0;
-    cursor = 0;
-    top = 0;
+    /* NULL: resumed, by Backspace, with what was typed and where. */
+    if (text) {
+        strncpy(query, text, QUERY_MAX);
+        query[QUERY_MAX] = 0;
+        find_cursor = 0;
+        find_top = 0;
+    }
     refresh();
+    cursor = find_cursor < nrows ? find_cursor : 0;
+    top = find_top <= cursor ? find_top : cursor;
     scr_cls();
     draw(HEADING, 1, 1);
     for (;;) {
@@ -315,6 +357,8 @@ int pick_find(const char* text)
         if (m == K_ENTER) {
             if (nrows > 0) {
                 scr_cursor(0, 0, 0);
+                find_cursor = cursor;
+                find_top = top;
 
                 return rows[cursor].topic;
             }

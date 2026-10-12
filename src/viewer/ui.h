@@ -124,10 +124,13 @@ int in_meaning(key k);
 /* --- the views ---------------------------------------------------------------- */
 
 /* What a view returns to main's loop. */
-enum { GO_QUIT, GO_VIEW, GO_TOC, GO_FIND };
+enum { GO_QUIT, GO_VIEW, GO_TOC, GO_FIND, GO_LIST };
 
 /* Open topic num in the topic view, keeping where we were in its history. */
 int view_open(unsigned num);
+/* Open topic num, opened from another view (GO_TOC, GO_LIST or GO_FIND):
+ * the history remembers it, so Backspace goes back there. */
+int view_open_from(unsigned num, int from);
 int view_loop(void);
 int view_current(void);     /* the topic shown, or -1 */
 int view_has(void);
@@ -140,6 +143,9 @@ int pick_topics(const char* heading, const ref_match* m, int n, int keys);
 int pick_hits(const char* heading, const ref_hit* h, int n);
 /* Search as you type, starting from text: a topic, or -1. */
 int pick_find(const char* text);
+/* The last list chosen from, again, its cursor where it was: a topic, or
+ * -1. And search as you type resumed, with what was typed (text NULL). */
+int pick_again(void);
 
 void ui_message(const char* text);
 void ui_help(void);

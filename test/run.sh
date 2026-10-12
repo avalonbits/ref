@@ -259,6 +259,35 @@ dump:deep")
 check "t from a topic deep in a closed page opens its way to it" \
       "$(dump "$t" deep | grep -c '0x0A: mos_fopen')" 1
 
+# --- Backspace goes back to where a topic was opened from ---
+t=$(scripted "ref" "down
+down
+down
+down
+down
+down
+down
+down
+enter
+back
+dump:start")
+check "Backspace from a topic opened from the contents goes back to them" \
+      "$(grep -A1 '^back to contents$' <<< "$t" | grep -c '^toc row 8 ')" 1
+check "  the start page, as it was" "$(dump "$t" start | head -1 | sed 's/ *$//')" "- Welcome & getting started"
+t=$(scripted "ref mos_f" "down
+down
+enter
+back")
+check "  from a list, to the list, on the row chosen" \
+      "$(grep -A1 '^back to list$' <<< "$t" | grep -c '^pick row 2 of 9 ')" 1
+t=$(scripted "ref" "c:/
+text:mos_fo
+down
+enter
+back")
+check "  from find, to find, with what was typed" \
+      "$(grep -A1 '^back to find$' <<< "$t" | grep -c "^pick row 1 of [0-9]* top 0 query 'mos_fo'$")" 1
+
 # --- help ---
 t=$(scripted "ref -k cd" "c:?
 esc")
