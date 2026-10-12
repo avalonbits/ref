@@ -1,0 +1,4 @@
+# Bad fence
+
+```
+never closed

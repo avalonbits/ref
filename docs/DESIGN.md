@@ -5,8 +5,9 @@ ref reads documents: one file each, in the format specified in
 two halves. A **builder**, in Python on a PC or Mac, compiles agon-docs
 into one, `mos.dat`. A **viewer**, in C on the Agon, reads documents with
 seeks and shows them. Between them is the format, and on the Agon side a
-portable **reader core** that knows it. Any other tool can write the format
-too.
+portable **reader core** that knows it. **md2ref**, in portable C, writes
+the format from any Markdown, on the Agon or a PC, so a program can ship
+its own documentation. Any other tool can write the format too.
 
     agon-docs (Markdown, at the commit in SOURCE)
         |
@@ -126,8 +127,9 @@ tests. [`refcore.h`](../src/core/refcore.h) is its API.
 - [`refcore.c`](../src/core/refcore.c) opens a document. It reads the header,
   checks the sections fit together, and loads the small tables (topics,
   directories, settings, dictionary). It decompresses a topic and the
-  topics shown with it into one view buffer, and its LZ4 decoder lets
-  matches reach back into the dictionary.
+  topics shown with it into one view buffer with the LZ4 decoder in
+  [`lz4.c`](../src/core/lz4.c), whose matches can reach back into the
+  dictionary.
 - [`normalize.c`](../src/core/normalize.c) is `normalize.py` in C, step for
   step, configured from the file's settings.
 - [`keys.c`](../src/core/keys.c) does lookups: an exact key, else the
@@ -205,6 +207,42 @@ That is all in [`script.c`](../src/viewer/script.c). The release build
 reaches it only through two macros, `SCRIPTED(...)` and `LOG(...)`, which
 compile to nothing there.
 
+## md2ref
+
+[`src/md2ref`](../src/md2ref) compiles Markdown pages into a document. It
+is portable C, built for the PC by `make host` and for the Agon by
+[`md2ref.mk`](../md2ref.mk), and gives the same bytes on both.
+[`md2ref.h`](../src/md2ref/md2ref.h) lists its files; in the order it
+runs:
+
+| Step | Where | What |
+|---|---|---|
+| pages | [`input.c`](../src/md2ref/input.c) | the files given, or a directory's `.md` files, index first; a page's file read whole and split into lines |
+| blocks | [`parse.c`](../src/md2ref/parse.c) | a page's lines into blocks: headings, paragraphs, code, lists, quotes, notes, tables, one function each |
+| outline | [`book.c`](../src/md2ref/book.c) | topics from headings, anchors as Python-Markdown makes them, then the contents |
+| markup | [`render.c`](../src/md2ref/render.c), [`inline.c`](../src/md2ref/inline.c) | each topic in ref's markup, links resolved, tables laid out; menus for topics too big to show with their children |
+| indexes | [`index.c`](../src/md2ref/index.c) | keys from headings' code spans, VDU sequences and title words, normalised by the reader core's own [`normalize.c`](../src/core/normalize.c); every word for the search |
+| file | [`write.c`](../src/md2ref/write.c), [`lz4w.c`](../src/md2ref/lz4w.c) | each topic compressed, and the sections in order |
+
+**Memory.** The Agon gives md2ref about 370 KB. So it goes through the
+pages twice, one at a time
+([`md2ref.c`](../src/md2ref/md2ref.c), `outline` and `render`): first for
+their topics and anchors, then, every link's target known, for their
+markup. A page's file and lines are freed as soon as it is parsed; its
+blocks and their text live in a *source* arena that is dropped after the
+page; what lasts goes in the *book's*. Each topic's markup is kept
+compressed, as the file holds it ([`lz4.c`](../src/core/lz4.c) undoes it
+for the index, and for a menu, which is added afterwards rather than
+rendered again from the page). Index words are interned, counted once per
+topic, and freed once their section is made. agon-docs' 105 KB of
+top-level pages peak at 245 KB, and its largest page, 96 KB, alone at
+240 KB (`make agon-md2ref-heap` measures it); parsing one page costs about
+three times its size.
+
+**Not the builder.** md2ref has no rules file: no hand-made keys, no link
+fixes, no gaps report, no shared dictionary. Its keys are what headings
+say. The builder stays the way agon-docs is made.
+
 ## Testing
 
 - `make test` runs the builder's tests ([`build/tests`](../build/tests)):
@@ -230,6 +268,13 @@ compile to nothing there.
 - [`test/core.sh`](../test/core.sh) builds the PC test tool for the Agon
   with agondev and with acc. It runs every mode in the emulator and
   requires the same answers as the PC, byte for byte.
+- `make test` also runs md2ref's tests
+  ([`build/tests/test_md2ref.py`](../build/tests/test_md2ref.py)), on a
+  small document ([`build/tests/md2ref`](../build/tests/md2ref)) read back
+  through the reader core, its errors, and all of agon-docs under the
+  sanitisers. [`test/md2ref.sh`](../test/md2ref.sh) runs md2ref in the
+  emulator: the documents it writes there must be the PC's byte for byte,
+  ref must list and read them, and 105 KB of agon-docs must fit.
 
 Every check has been confirmed to fail when the line it covers is broken.
 
@@ -239,6 +284,13 @@ Every check has been confirmed to fail when the line it covers is broken.
   that the load happens after the increment. [`agon.mk`](../agon.mk)
   builds with `-mllvm -twoaddr-reschedule=false`, which avoids it.
   `test/core.sh` catches it if it returns.
+- **Two programs, one tree.** agondev's makefile takes every `.c` under
+  `src` as a program's objects, and reads them before agon.mk or md2ref.mk
+  can narrow them. The [`Makefile`](../Makefile) gives each its `OBJS` on
+  the command line instead.
+- **`unsigned` is 24 bits** on the eZ80. md2ref's LZ4 hash shifts its
+  32-bit product before narrowing it; narrowed first, the Agon's output
+  differed from the PC's, which `test/md2ref.sh` caught.
 - **Memory.** About 40 KB of code and 75 KB of statics, and a heap that
   peaks at about 85 KB (`make agon-heap` measures it): well inside the
   448 KB a program has.

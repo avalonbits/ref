@@ -6,8 +6,9 @@ full-text index. A reader reads it with seeks and never loads it whole, so a
 book can be larger than the Agon's memory.
 
 ref reads any file in this format. ref's own builder (`build/`) writes
-agon-docs as `mos.dat`; another project can write its own documentation in
-the same format with any tool.
+agon-docs as `mos.dat`; md2ref (`src/md2ref/`) writes one from Markdown, on
+the Agon or a PC; another project can write its own documentation in the
+same format with any tool.
 
 ## Where documents live
 
@@ -57,8 +58,8 @@ reject a file whose sections overlap or overrun.
 | 0 | 8 | magic: `AGONREF` and 0x1A |
 | 8 | 2 | format version: 1 |
 | 10 | 2 | flags: bit 0, the book has a title (offset 104); other bits 0 |
-| 12 | 12 | the source's revision, ASCII, NUL-padded (ref's builder writes the first 12 hex digits of the agon-docs commit) |
-| 24 | 12 | the source's date, `YYYY-MM-DD`, NUL-padded |
+| 12 | 12 | the source's revision, ASCII, NUL-padded (ref's builder writes the first 12 hex digits of the agon-docs commit; md2ref writes `md2ref`) |
+| 24 | 12 | the source's date, `YYYY-MM-DD`, NUL-padded; all NUL when unknown, as md2ref leaves it |
 | 36 | 2 | topics |
 | 38 | 2 | contents nodes |
 | 40 | 2 | key blocks |

@@ -21,6 +21,8 @@ AGONDEV_FIX = -mllvm -twoaddr-reschedule=false
 CFLAGS += -Isrc/core -Wall $(AGONDEV_FIX) $(EXTRA_CFLAGS) -MMD -MP
 
 # ref is the reader core and the viewer: not every .c under src, which is
-# what makefile.inc would take (src/md2ref is md2ref.mk's).
+# what makefile.inc would take (src/md2ref is md2ref.mk's). The top-level
+# Makefile gives OBJS on the command line, as it must be for the link's
+# prerequisites too; this covers the recipe when run by hand.
 OBJS := $(patsubst $(SRCDIR)/%.c,$(OBJDIR)/%.o,$(wildcard src/core/*.c src/viewer/*.c))
 -include $(shell find $(OBJDIR) -name '*.d' 2>/dev/null)

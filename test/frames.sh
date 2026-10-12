@@ -26,13 +26,14 @@ trap 'rm -rf "$OUT"' EXIT
 # The flags the real build uses, from agondev's makefile.inc: -Oz decides
 # what is inlined, and inlining is what puts one function's buffer in
 # another's frame.
-for f in src/core/*.c src/viewer/*.c; do
+# Named dir/file, as input.c is both the viewer's and md2ref's.
+for f in src/core/*.c src/viewer/*.c src/md2ref/*.c; do
     [ -f "$f" ] || continue
     "$CC" -mllvm -z80-gas-style -mllvm -z80-print-zero-offset -nostdinc \
           -Isrc/core -isystem "$TOOLCHAIN/include" -target ez80-none-elf \
           -DAGONDEV -Oz -Wa,-march=ez80+full -fno-threadsafe-statics \
           -mllvm -twoaddr-reschedule=false \
-          -S "$f" -o "$OUT/$(basename "$f" .c).s" 2>/dev/null \
+          -S "$f" -o "$OUT/$(basename "$(dirname "$f")")__$(basename "$f" .c).s" 2>/dev/null \
         || { echo "FAIL  frames: could not compile $f"; exit 1; }
 done
 
@@ -45,7 +46,7 @@ ESCAPE_BUDGET = 0
 
 frames, escapes, cur, pend = {}, {}, None, None
 for path in sorted(glob.glob(os.path.join(sys.argv[1], '*.s'))):
-    unit = os.path.basename(path)[:-2]
+    unit = os.path.basename(path)[:-2].replace('__', '/')
     for line in open(path):
         s = line.strip()
         m = re.match(r'^_([A-Za-z_][A-Za-z0-9_]*):', s)

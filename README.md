@@ -12,6 +12,7 @@ MOS 3.0.2.
 Copy ref, and each document, to the SD card:
 
     /bin/ref.bin
+    /bin/md2ref.bin                 to write documents (see below)
     /config/ref/docs/mos.dat
     /config/ref/docs/<name>.dat     any other document
 
@@ -21,7 +22,8 @@ mos.dat yourself for your own card (see [Building](#building)).
 
 A document's name is its file's, without `.dat`: one to eight lower-case
 letters and digits. Any project can ship its documentation as a document:
-[docs/FORMAT.md](docs/FORMAT.md) specifies the format.
+write it in Markdown and compile it with md2ref, or write the format,
+specified in [docs/FORMAT.md](docs/FORMAT.md), with any tool.
 
 ## Looking things up
 
@@ -90,6 +92,46 @@ and Enter opens a topic.
 
 ref uses the screen mode and font already in use; under hub, the prompt's.
 
+## Writing a document
+
+md2ref compiles Markdown pages into a document, on the Agon or on a PC:
+
+    md2ref -o /config/ref/docs/<name>.dat <dir>
+    md2ref -o <file.dat> [-t <title>] [-w] <dir> | <page.md>...
+
+A directory gives its `.md` files: `index.md` or `README.md` first, then
+the rest by name. A program's documentation lives in a `ref-doc/` directory
+beside its source, so `md2ref -o /config/ref/docs/myprog.dat ref-doc`
+installs it, and `ref myprog` reads it.
+
+- **Topics** are the headings, nested by level. A page that opens with its
+  only `#` heading is that topic; otherwise the page is a topic titled
+  from its file name, with its headings under it. The document's title is
+  the first page's first heading, or `-t`'s.
+- **Keys**: a heading is found by each code span in it, by the VDU
+  sequence it names, and by the words of its title. `` ## `strtol`,
+  `strtoul` `` makes `ref <doc> strtoul` go straight to it. The search
+  covers every word of every topic.
+- **Links** between pages, `[text](page.md#anchor)`, are followed in ref.
+  An anchor is a heading's, made as MkDocs makes them, or one set with
+  `{#id}` on a heading, paragraph or table cell. Links to the web stay as
+  their text and URL.
+- **Markdown**: headings (`#` and underlined), paragraphs, emphasis, code
+  spans, fenced and indented code, lists, nested, block quotes, tables,
+  rules, footnotes, MkDocs notes (`!!!`, `???`), and `<br>`, `<b>`, `<i>`,
+  `<em>` and `<kbd>`. Other HTML shows as it is written.
+
+md2ref stops at the first page with an error -- a link that leads nowhere,
+a code block never closed -- and writes nothing. Errors read
+`file:line: error: ...`, and md2ref returns 100, so an editor can go to the
+line. `-w` makes a link that leads nowhere a warning.
+
+On the Agon, md2ref reads the pages twice, one at a time, and holds only
+what it is making, compressed. agon-docs' 105 KB of top-level pages
+compile in 245 KB of memory, and each of its pages compiles on its own,
+the largest 96 KB; its 193 KB `mos/` folder, which has an 89 KB page, is
+more than fits.
+
 ## Building
 
 mos.dat is built on a PC or Mac with Python 3.11 or later, from agon-docs
@@ -98,9 +140,13 @@ at the commit pinned in [`SOURCE`](SOURCE). ref.bin is built with
 
     make dat            fetch agon-docs and write out/mos.dat
     make agon           bin/ref.bin
-    make test           the builder's tests, and the reader core on the PC
+    make agon-md2ref    bin/md2ref/md2ref.bin
+    make host           md2ref for the PC: out/host/md2ref
+    make test           the builder's and md2ref's tests, and the reader
+                        core on the PC
     make emu            ref in fab-agon-emulator
     test/core.sh        the reader core on the Agon, built by agondev and acc
+    test/md2ref.sh      md2ref on the Agon, against the PC
 
 When the wiki changes, move the commit in `SOURCE` and run `make dat`. The
 builder stops on a link it cannot resolve and lists any heading its rules,

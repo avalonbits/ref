@@ -2,7 +2,11 @@
 #
 #   make dat         fetch agon-docs at the pinned commit, build out/mos.dat,
 #                    and write out/report.txt
-#   make host        the reader core built for the PC: out/host/reftool
+#   make host        the reader core built for the PC: out/host/reftool, and
+#                    md2ref: out/host/md2ref
+#   make agon-md2ref bin/md2ref/md2ref.bin, md2ref for the Agon (md2ref.mk)
+#   make agon-md2ref-heap
+#                    bin/md2ref-heap/md2ref.bin, with the zmalloc shim
 #   make acc-core    the reader core compiled by acc, which must keep working
 #   make agon        bin/ref.bin, by agondev (agon.mk)
 #   make agon-script bin/script/ref.bin: keys from /ref.keys, a transcript
@@ -22,9 +26,21 @@ CORE_HDR := $(wildcard src/core/*.h)
 SAN      := -fsanitize=address,undefined -fno-sanitize-recover=all
 
 AGONDEV ?= $(HOME)/agondev
-AGON_MAKE = PATH=$(AGONDEV)/bin:$$PATH $(MAKE) -f agon.mk
+# Each program's objects, given on the command line: makefile.inc takes
+# every .c under src as the link's prerequisites when it is read, so
+# setting OBJS in agon.mk or md2ref.mk, after it, would still compile the
+# other program's sources. Expanded by the sub-make, with its OBJDIR.
+REF_OBJS = OBJS='$$(patsubst src/%.c,$$(OBJDIR)/%.o,$$(wildcard src/core/*.c src/viewer/*.c))'
+MD2REF_OBJS = OBJS='$$(patsubst src/%.c,$$(OBJDIR)/%.o,$$(wildcard src/md2ref/*.c) \
+	src/core/normalize.c src/core/lz4.c $$(if $$(ZMALLOC),src/viewer/zmalloc.c))'
 
-.PHONY: all dat host acc-core test frames agon agon-script agon-heap emu
+AGON_MAKE = PATH=$(AGONDEV)/bin:$$PATH $(MAKE) -f agon.mk $(REF_OBJS)
+MD2REF_MAKE = PATH=$(AGONDEV)/bin:$$PATH $(MAKE) -f md2ref.mk $(MD2REF_OBJS)
+
+.PHONY: all dat host acc-core test frames agon agon-script agon-heap agon-md2ref \
+	agon-md2ref-heap emu
+
+ZMALLOC_FLAGS = -DZMALLOC -Dmalloc=z_malloc -Dcalloc=z_calloc -Drealloc=z_realloc -Dfree=z_free
 
 all: dat
 
@@ -34,7 +50,15 @@ dat:
 
 # -fsigned-char: char is signed on the eZ80, so the PC build reads bytes the
 # way the Agon builds do.
-host: out/host/reftool
+host: out/host/reftool out/host/md2ref
+
+MD2REF_SRC := $(wildcard src/md2ref/*.c) src/core/normalize.c src/core/lz4.c
+MD2REF_HDR := $(wildcard src/md2ref/*.h) $(CORE_HDR)
+
+out/host/md2ref: $(MD2REF_SRC) $(MD2REF_HDR)
+	@mkdir -p out/host
+	$(CC) -std=c99 -Wall -Wextra -Wno-unused-parameter -Werror -fsigned-char -O1 -g $(SAN) \
+		-Isrc/core $(MD2REF_SRC) -o $@
 
 out/host/reftool: $(CORE_SRC) $(CORE_HDR) test/host/reftool.c
 	@mkdir -p out/host
@@ -65,10 +89,19 @@ agon-script:
 	@mkdir -p bin/script obj/script
 	$(AGON_MAKE) OBJDIR=obj/script BINDIR=bin/script EXTRA_CFLAGS=-DREF_SCRIPT
 
+agon-md2ref:
+	@mkdir -p bin/md2ref obj/md2ref
+	$(MD2REF_MAKE) OBJDIR=obj/md2ref BINDIR=bin/md2ref
+
+agon-md2ref-heap:
+	@mkdir -p bin/md2ref-heap obj/md2ref-heap
+	$(MD2REF_MAKE) OBJDIR=obj/md2ref-heap BINDIR=bin/md2ref-heap ZMALLOC=1 \
+		EXTRA_CFLAGS='$(ZMALLOC_FLAGS)'
+
 agon-heap:
 	@mkdir -p bin/heap obj/heap
 	$(AGON_MAKE) OBJDIR=obj/heap BINDIR=bin/heap \
-		EXTRA_CFLAGS='-DREF_SCRIPT -DZMALLOC -Dmalloc=z_malloc -Dcalloc=z_calloc -Drealloc=z_realloc -Dfree=z_free'
+		EXTRA_CFLAGS='-DREF_SCRIPT $(ZMALLOC_FLAGS)'
 
 emu:
 	test/run.sh
