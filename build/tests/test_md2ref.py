@@ -409,6 +409,27 @@ class Md2ref(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stdout)
         self.assertIn(b'if x:\n    y = 1\n', b''.join(views(data)))
 
+    def test_a_run_of_tabbed_lines_past_the_window(self):
+        # Each line is read once, its tabs expanded beside the window as
+        # it is: one run -- a code block in a list item, every line of it
+        # tabbed -- longer than the window's first 8 KB, so that the
+        # window is refilled and the expanded lines' room grows while the
+        # run is read. Each line comes out as it was, in its place.
+        body = ''.join('\t\tline %d\tend\n' % k for k in range(900))
+        p, data, left = compile_pages({'index.md': '# T\n\n- item\n\n' + body + '\nafter\n'})
+        self.assertEqual(p.returncode, 0, p.stdout)
+        want = ''.join(('\t\tline %d\tend' % k).expandtabs(4)[6:] + '\n' for k in range(900))
+        self.assertIn(want.encode(), b''.join(views(data)))
+
+    def test_a_line_cut_into_has_its_indent_counted_again(self):
+        # A quote's line without its > starts a new indent, counted again:
+        # four spaces after "> " make code in the quote, three do not.
+        p, data, left = compile_pages({'index.md': '# T\n\n>     code here\n\n>    not code\n'})
+        self.assertEqual(p.returncode, 0, p.stdout)
+        v = b''.join(views(data))
+        self.assertIn(b'\xc3\x02\x00code here\n\x00', v)        # PRE, in a note
+        self.assertIn(b'\xc1\x02\x02not code\x00', v)          # PARA
+
     def test_text_is_compressed_past_64_kb(self):
         # The compressor's table of positions is shared by every topic, and
         # cleared only when they would pass 16 bits: 120 KB of topics, and

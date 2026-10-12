@@ -194,33 +194,53 @@ static int expand(const char* s, int len, char* out)
     return col;
 }
 
-/* The line from r to e as the parser sees it, \r dropped, tabs expanded. */
-static line seen(unsigned r, int e)
+static int spaces(const char* s, int len)
+{
+    int k = 0;
+
+    while (k < len && s[k] == ' ') {
+        k++;
+    }
+
+    return k;
+}
+
+/* The line from r to e as the parser sees it, \r dropped, tabs expanded
+ * (into out, room for them, when it has any), its indent counted. */
+static line seen_into(unsigned r, int e, char* out)
 {
     line l;
     const char* s = win + beg + r;
     int len = e - (int)r;
-    int tabs;
 
     while (len > 0 && s[len - 1] == '\r') {
         len--;
     }
-    tabs = tabs_in(s, len);
     l.text = s;
     l.len = len;
     l.no = 0;
-    if (tabs) {
-        unsigned need = (unsigned)(len + tabs * 3 + 1);
-
-        if (need > look_size) {
-            look_size = need;
-            look = md_realloc(look, look_size);
-        }
-        l.len = expand(s, len, look);
-        l.text = look;
+    if (tabs_in(s, len)) {
+        l.len = expand(s, len, out);
+        l.text = out;
     }
+    l.indent = spaces(l.text, l.len);
 
     return l;
+}
+
+/* As seen_into, into look: for a line only looked at. */
+static line seen(unsigned r, int e)
+{
+    const char* s = win + beg + r;
+    int len = e - (int)r;
+    unsigned need = (unsigned)(len + tabs_in(s, len) * 3 + 1);
+
+    if (need > look_size) {
+        look_size = need;
+        look = md_realloc(look, look_size);
+    }
+
+    return seen_into(r, e, look);
 }
 
 /* A run may end before l: it starts a block, and no block before it can
@@ -264,17 +284,33 @@ static int skip_front(void)
     }
 }
 
+/* Room in expanded for a line of len bytes with tabs in it, from x. */
+static void expanded_room(unsigned x, int len, int tabs)
+{
+    unsigned need = x + (unsigned)(len + tabs * 3 + 1);
+
+    if (need > expanded_size) {
+        expanded_size = need + 256;
+        expanded = md_realloc(expanded, expanded_size);
+    }
+}
+
+/* Each of a run's lines is read once: where it ends, its tabs expanded,
+ * its indent counted, and kept, so the parser asks none of it again. Its
+ * text is kept as an offset -- from beg into the window, or into
+ * expanded, marked by a negative length until the run is done -- as more
+ * read into the window, or a longer line expanded, moves both. */
 int page_next(line** lines, int* n)
 {
     unsigned r;
+    unsigned x = 0;             /* expanded's bytes so far */
     int fenced;
     char mark = 0;
     int open_len = 0;
     int was_blank;
     int count;
     int e;
-    unsigned size;
-    char* x;
+    int k;
 
     beg += taken;
     taken = 0;
@@ -292,9 +328,11 @@ int page_next(line** lines, int* n)
     fenced = 0;
     was_blank = 0;
     count = 0;
-    size = 0;
     for (;;) {
         line l;
+        const char* s;
+        int tabs;
+        int len;
 
         e = line_at(r);
         if (e == -2) {
@@ -309,7 +347,13 @@ int page_next(line** lines, int* n)
         if (e == -1) {
             break;
         }
-        l = seen(r, e);
+        s = win + beg + r;
+        len = e - (int)r;
+        tabs = tabs_in(s, len);
+        if (tabs) {
+            expanded_room(x, len, tabs);
+        }
+        l = seen_into(r, e, tabs ? expanded + x : NULL);
         if (count > 0 && !fenced && was_blank && starts_run(&l)) {
             break;
         }
@@ -319,45 +363,32 @@ int page_next(line** lines, int* n)
             fenced = 1;
         }
         was_blank = line_blank(&l);
+        if (count == run_size) {
+            run_size = count + 64;
+            run = md_realloc(run, (unsigned)run_size * (unsigned)sizeof(line));
+        }
+        run[count] = l;
+        run[count].no = next_no + count;
+        if (tabs) {
+            run[count].text = (const char*)(uintptr_t)x;
+            run[count].tabbed = 1;
+            x += (unsigned)l.len;
+        } else {
+            run[count].text = (const char*)(uintptr_t)r;
+            run[count].tabbed = 0;
+        }
         count++;
-        size += (unsigned)(tabs_in(win + beg + r, e - (int)r) * 3 + l.len + 1);
         r = (unsigned)e + (beg + (unsigned)e < end);
     }
     if (count == 0) {
         return 0;
     }
-
-    /* Its lines: in the window, or expanded beside it. */
-    if (count > run_size) {
-        run_size = count + 64;
-        run = md_realloc(run, (unsigned)run_size * (unsigned)sizeof(line));
-    }
-    if (size > expanded_size) {
-        expanded_size = size + 256;
-        expanded = md_realloc(expanded, expanded_size);
-    }
-    x = expanded;
     taken = r;
-    r = 0;
-    for (count = 0; (unsigned)r < taken; count++) {
-        const char* s = win + beg + r;
-        int len;
+    next_no += count;
+    for (k = 0; k < count; k++) {
+        uintptr_t at = (uintptr_t)run[k].text;
 
-        e = line_at(r);
-        len = e - (int)r;
-        while (len > 0 && s[len - 1] == '\r') {
-            len--;
-        }
-        run[count].no = next_no++;
-        if (tabs_in(s, len)) {
-            run[count].len = expand(s, len, x);
-            run[count].text = x;
-            x += run[count].len;
-        } else {
-            run[count].text = s;
-            run[count].len = len;
-        }
-        r = (unsigned)e + 1;
+        run[k].text = run[k].tabbed ? expanded + at : win + beg + at;
     }
     *lines = run;
     *n = count;

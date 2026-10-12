@@ -23,23 +23,32 @@ static int max_blocks;
 
 /* --- lines --------------------------------------------------------------------- */
 
-static int indent_of(const line* l)
+/* The spaces a line starts with, counted: as input.c counts them, for a
+ * line made here from part of another. */
+static int count_indent(const char* s, int len)
 {
     int k = 0;
 
-    while (k < l->len && l->text[k] == ' ') {
+    while (k < len && s[k] == ' ') {
         k++;
     }
 
     return k;
 }
 
-static int blank(const line* l)
+/* Found once, as the line was read (input.c), or made (dedent). */
+static int indent_of(const line* l)
 {
-    return indent_of(l) == l->len;
+    return l->indent;
 }
 
-/* l's text from its k-th column on, as a new line. */
+static int blank(const line* l)
+{
+    return l->indent == l->len;
+}
+
+/* l's text from its k-th column on, as a new line: its indent what was
+ * left of it, unless k cut into its text. */
 static line dedent(const line* l, int k)
 {
     line d = *l;
@@ -49,6 +58,7 @@ static line dedent(const line* l, int k)
     }
     d.text += k;
     d.len -= k;
+    d.indent = k <= l->indent ? l->indent - k : count_indent(d.text, d.len);
 
     return d;
 }
@@ -79,11 +89,16 @@ static const char* find(const char* s, int n, const char* pat)
     return NULL;
 }
 
-static int starts(const line* l, const char* s)
+static int starts_at(const char* text, int len, const char* s)
 {
     int n = (int)strlen(s);
 
-    return l->len >= n && memcmp(l->text, s, (size_t)n) == 0;
+    return len >= n && memcmp(text, s, (size_t)n) == 0;
+}
+
+static int starts(const line* l, const char* s)
+{
+    return starts_at(l->text, l->len, s);
 }
 
 /* --- what a line starts ------------------------------------------------------ */
@@ -189,9 +204,9 @@ static int note(const line* l)
 {
     int i = indent_of(l);
 
-    return i < 4 && (starts(&(line){ l->text + i, l->len - i, 0 }, "!!! ")
-                     || starts(&(line){ l->text + i, l->len - i, 0 }, "??? ")
-                     || starts(&(line){ l->text + i, l->len - i, 0 }, "???+ "));
+    return i < 4 && (starts_at(l->text + i, l->len - i, "!!! ")
+                     || starts_at(l->text + i, l->len - i, "??? ")
+                     || starts_at(l->text + i, l->len - i, "???+ "));
 }
 
 /* A list item: its bullet's length (with what follows it up to the text),
@@ -885,7 +900,7 @@ static void parse(const line* L, int n, int indent, int in_note, int first_space
             continue;
         }
         space = count > 0 || first_space;
-        if (ind < 4 && starts(&(line){ l->text + ind, l->len - ind, 0 }, "[TOC]")) {
+        if (ind < 4 && starts_at(l->text + ind, l->len - ind, "[TOC]")) {
             i++;
             continue;
         }

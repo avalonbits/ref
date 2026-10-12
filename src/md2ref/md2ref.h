@@ -89,10 +89,16 @@ extern int md_keep_going;   /* -w: an unresolved link is a warning */
 
 /* --- the pages ------------------------------------------------------------------ */
 
+/* What the parser asks of a line again and again -- where its text starts,
+ * whether it is blank -- found once, as it is read. 16 bytes, so that
+ * L[i] is a shift and not a multiply (9 bytes was __imuls at every use). */
 typedef struct {
     const char* text;       /* the line, from where its block's content starts */
     int len;
     int no;                 /* its number in the page, from 1 */
+    int indent;             /* its leading spaces: len when it is blank */
+    uint8_t tabbed;         /* its tabs expanded: its text is not the window's */
+    uint8_t pad[3];
 } line;
 
 typedef struct block block;
