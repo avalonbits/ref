@@ -50,13 +50,19 @@ static ref_file settings;           /* only what ref_normalize reads */
 
 static uint8_t word_char[256];
 static uint8_t word_kind[256];      /* NOT_DIGIT | REAL, for a byte in a word */
-static uint8_t stop_at[27];
-static uint8_t stop_len[NSTOP];
+/* The stop words packed, each its length and its letters, those of a
+ * first letter together from stop_off[c - 'a']; and for each first
+ * letter, a bit for each length one of them has. */
+static uint8_t stop_pack[1024];
+static uint16_t stop_off[27];
+static uint8_t stop_lens[26];
+static const uint8_t len_bit[8] = { 0, 1, 2, 4, 8, 16, 32, 64 };
 
 static void make_tables(void)
 {
     int c;
     int k = 0;
+    unsigned n = 0;
 
     for (c = 0; c < 256; c++) {
         if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '$') {
@@ -68,29 +74,42 @@ static void make_tables(void)
                                  | (c != '_' && c != '$' ? REAL : 0));
     }
     for (c = 0; c < 26; c++) {
-        stop_at[c] = (uint8_t)k;
+        stop_off[c] = (uint16_t)n;
         while (k < NSTOP && STOP[k][0] == 'a' + c) {
-            stop_len[k] = (uint8_t)strlen(STOP[k]);
+            unsigned l = (unsigned)strlen(STOP[k]);
+
+            stop_pack[n++] = (uint8_t)l;
+            memcpy(stop_pack + n, STOP[k], l);
+            n += l;
+            stop_lens[c] |= len_bit[l];
             k++;
         }
     }
-    stop_at[26] = (uint8_t)k;
+    stop_off[26] = (uint16_t)n;
 }
 
 #define STOP_MAX 7          /* the longest stop word */
 
-static int is_stop(const char* w, int len)
+/* Every word of every topic is asked: most are longer than any stop word,
+ * or no stop word starts with their letter and has their length, which
+ * byte operations say; the rest are looked for among the few that do. */
+static int is_stop(const char* word, int len)
 {
-    int c = w[0] - 'a';
-    int k;
+    const uint8_t* w = (const uint8_t*)word;
+    uint8_t c = (uint8_t)(w[0] - 'a');
+    const uint8_t* p;
+    const uint8_t* e;
 
-    if (len > STOP_MAX || c < 0 || c >= 26) {
+    if (len > STOP_MAX || c >= 26 || !(stop_lens[c] & len_bit[len])) {
         return 0;
     }
-    for (k = stop_at[c]; k < stop_at[c + 1]; k++) {
-        if (stop_len[k] == len && memcmp(STOP[k], w, (size_t)len) == 0) {
+    p = stop_pack + stop_off[c];
+    e = stop_pack + stop_off[c + 1];
+    while (p < e) {
+        if (p[0] == len && (len < 2 || p[2] == w[1]) && memcmp(p + 1, w, (size_t)len) == 0) {
             return 1;
         }
+        p += 1 + p[0];
     }
 
     return 0;
@@ -640,6 +659,7 @@ void words_end(void)
 /* --- sorting the words file ---------------------------------------------------- */
 
 static uint8_t* run;                /* RUN bytes */
+static uint8_t* sorted;             /* and they in order */
 
 /* A run's records, to be sorted: where each is in the run. */
 static uint16_t* rec;
@@ -647,28 +667,22 @@ static uint16_t* rec_tmp;
 static unsigned nrec;
 static unsigned rec_cap;
 
-/* a's word after b's: from the fourth letter on, where every word has
- * three and the radix passes have settled those. */
+/* a's word after b's. */
 static int rec_after(unsigned a, unsigned b)
 {
     const uint8_t* p = run + a;
     const uint8_t* q = run + b;
     unsigned la = p[0];
     unsigned lb = q[0];
-    unsigned n = (la < lb ? la : lb) - 3;
+    int c = memcmp(p + 1, q + 1, la < lb ? la : lb);   /* the eZ80's cpi */
 
-    p += 4;
-    q += 4;
-    while (n && *p == *q) {
-        p++;
-        q++;
-        n--;
-    }
-
-    return n ? *p > *q : la > lb;
+    return c ? c > 0 : la > lb;
 }
 
-/* One stable counting pass on each record's byte at d. The counts are 16
+#define RADIX_LETTERS 3
+
+/* One stable counting pass on each record's letter d, 0 for a word too
+ * short to have one -- as a shorter word sorts first. The counts are 16
  * bits, as indexing them is then an add, where 24 bits is a multiply. */
 static void radix_pass(const uint16_t* from, uint16_t* to, unsigned d)
 {
@@ -678,7 +692,9 @@ static void radix_pass(const uint16_t* from, uint16_t* to, unsigned d)
 
     memset(pos, 0, sizeof pos);
     for (i = 0; i < nrec; i++) {
-        pos[run[from[i] + d]]++;
+        const uint8_t* r = run + from[i];
+
+        pos[r[0] >= d ? r[d] : 0]++;
     }
     for (i = 0; i < 256; i++) {
         unsigned c = pos[i];
@@ -687,40 +703,44 @@ static void radix_pass(const uint16_t* from, uint16_t* to, unsigned d)
         sum += c;
     }
     for (i = 0; i < nrec; i++) {
-        uint16_t r = from[i];
+        uint16_t f = from[i];
+        const uint8_t* r = run + f;
 
-        to[pos[run[r + d]]++] = r;
+        to[pos[r[0] >= d ? r[d] : 0]++] = f;
     }
 }
 
-/* The run's records in order: by their first three letters, a stable
- * counting pass each from the third back, which is linear; then the few
- * that share all three, by inserting. */
+/* The run's records in order: by their first six letters, a stable
+ * counting pass each from the sixth back, which is linear; then by
+ * inserting, which with them nearly in order is a comparison or so each. */
 static void sort_run(void)
 {
+    uint16_t* from = rec;
+    uint16_t* to = rec_tmp;
+    unsigned d;
     unsigned i;
 
-    radix_pass(rec, rec_tmp, 3);
-    radix_pass(rec_tmp, rec, 2);
-    radix_pass(rec, rec_tmp, 1);
+    for (d = RADIX_LETTERS; d >= 1; d--) {
+        uint16_t* t;
+
+        radix_pass(from, to, d);
+        t = from;
+        from = to;
+        to = t;
+    }
     for (i = 1; i < nrec; i++) {
-        uint16_t x = rec_tmp[i];
-        const uint8_t* p = run + x + 1;
+        uint16_t x = from[i];
         unsigned j = i;
 
-        while (j > 0) {
-            uint16_t y = rec_tmp[j - 1];
-            const uint8_t* q = run + y + 1;
-
-            if (p[0] != q[0] || p[1] != q[1] || p[2] != q[2] || !rec_after(y, x)) {
-                break;
-            }
-            rec_tmp[j] = y;
+        while (j > 0 && rec_after(from[j - 1], x)) {
+            from[j] = from[j - 1];
             j--;
         }
-        rec_tmp[j] = x;
+        from[j] = x;
     }
-    memcpy(rec, rec_tmp, nrec * sizeof(uint16_t));
+    if (from != rec) {
+        memcpy(rec, from, nrec * sizeof(uint16_t));
+    }
 }
 
 static int key_cmp(const uint8_t* a, const uint8_t* b)
@@ -820,8 +840,16 @@ static int make_runs(unsigned long* starts)
         }
         sort_run();
         starts[nruns++] = runs_size();
-        for (k = 0; k < nrec; k++) {
-            runs_put(run + rec[k], 1u + run[rec[k]] + 2u);
+        {
+            unsigned o = 0;
+
+            for (k = 0; k < nrec; k++) {      /* in order, then one write */
+                unsigned size = 1u + run[rec[k]] + 2u;
+
+                memcpy(sorted + o, run + rec[k], size);
+                o += size;
+            }
+            runs_put(sorted, o);
         }
         nrec = 0;
         used = 0;
@@ -862,12 +890,35 @@ static unsigned tidy(uint16_t* v, unsigned n)
     return o;
 }
 
+/* What write_words writes, gathered: a word's entry is a dozen small
+ * pieces, and each a write of its own was a call or three. */
+static uint8_t stage[512];
+static unsigned nstage;
+static void (*stage_to)(const void* p, unsigned n);
+
+static void stage_flush(void)
+{
+    if (nstage) {
+        stage_to(stage, nstage);
+        nstage = 0;
+    }
+}
+
+/* Room for n more, n at most sizeof stage. */
+static uint8_t* stage_room(unsigned n)
+{
+    if (nstage + n > sizeof stage) {
+        stage_flush();
+    }
+
+    return stage + nstage;
+}
+
 int write_words(void (*emit)(const void* p, unsigned n))
 {
     static unsigned long starts[MAX_RUNS + 1];
     static uint8_t key[WORD_MAX + 1];
     static uint8_t prev[WORD_MAX + 1];
-    static uint8_t out[16];
     static unsigned eq[MAX_RUNS];
     window* win;
     window** live;              /* pointers, as indexing windows is a multiply */
@@ -883,9 +934,11 @@ int write_words(void (*emit)(const void* p, unsigned n))
     words_section.dir = NULL;
     words_section.count = 0;
     run = md_realloc(NULL, RUN);
+    sorted = md_realloc(NULL, RUN);
     nruns = make_runs(starts);
+    free(sorted);
     free(run);
-    run = NULL;
+    run = sorted = NULL;
     free(rec);
     free(rec_tmp);
     rec = rec_tmp = NULL;
@@ -900,6 +953,8 @@ int write_words(void (*emit)(const void* p, unsigned n))
         win[r].have = win[r].at = 0;
     }
     prev[0] = 0;
+    stage_to = emit;
+    nstage = 0;
 
     /* Merged: the least word of the runs' current records, from each run
      * that has it, its topics gathered; then written. live holds the runs
@@ -987,25 +1042,29 @@ int write_words(void (*emit)(const void* p, unsigned n))
         while (shared < 255 && shared < prev[0] && shared < klen && prev[1 + shared] == key[1 + shared]) {
             shared++;
         }
-        out[0] = (uint8_t)shared;
-        out[1] = (uint8_t)(klen - shared);
-        emit(out, 2);
-        emit(key + 1 + shared, klen - shared);
-        words_section.len += 2 + klen - shared;
-        o = varint(out, n);
-        emit(out, o);
-        words_section.len += o;
+        {
+            uint8_t* q = stage_room(2 + WORD_MAX + 4);
+
+            q[0] = (uint8_t)shared;
+            q[1] = (uint8_t)(klen - shared);
+            memcpy(q + 2, key + 1 + shared, klen - shared);
+            o = 2 + klen - shared;
+            o += varint(q + o, n);
+            nstage += o;
+            words_section.len += o;
+        }
         for (j = 0; j < n; j++) {
             unsigned t = v[j] & 0x7FFF;
 
-            o = varint(out, (t - at_topic) << 1 | (unsigned)(v[j] >> 15));
-            emit(out, o);
+            o = varint(stage_room(4), (t - at_topic) << 1 | (unsigned)(v[j] >> 15));
+            nstage += o;
             words_section.len += o;
             at_topic = t;
         }
         memcpy(prev, key, klen + 1);
         words_section.count++;
     }
+    stage_flush();
     words_section.blocks = (words_section.count + BLOCK - 1) / BLOCK;
     free(live);
     free(win);
