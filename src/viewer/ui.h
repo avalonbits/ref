@@ -100,12 +100,19 @@ typedef struct {
 #define VK_KP_RIGHT  157
 #define VK_F1        159
 #define VK_F3        161
+#define VK_f         27
+#define VK_n         35
+#define VK_p         37
+#define VK_F         53         /* shifted: MOS reports the shifted letter */
+#define VK_N         61
+#define VK_P         63
 
 /* What a key means, whichever of its spellings was pressed. */
 enum {
     K_NONE, K_CHAR, K_UP, K_DOWN, K_LEFT, K_RIGHT, K_PGUP, K_PGDN, K_HOME, K_END,
     K_ENTER, K_ESC, K_BACK, K_TAB, K_BACKTAB, K_HISTBACK, K_HISTFWD, K_FIND, K_HELP,
-    K_DELETE
+    K_DELETE, K_HEAD_NEXT, K_HEAD_PREV, K_LINK_NEXT, K_LINK_PREV, K_FIND_HERE,
+    K_FIND_NEXT, K_FIND_PREV
 };
 
 void in_open(void);

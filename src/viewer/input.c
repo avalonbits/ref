@@ -4,7 +4,8 @@
  * read from /ref.keys on the card, one key a line:
  *
  *   up down left right pgup pgdn home end enter esc tab backtab back del
- *   alt+left alt+right f1 f3
+ *   alt+left alt+right f1 f3 ctrl+up ctrl+down ctrl+left ctrl+right
+ *   ctrl+f ctrl+n ctrl+p
  *   c:<x>          the character x          text:<s>   each character of s
  *   dump:<why>     not a key: write the screen to the transcript
  *   vdp:<why>      not a key: write what the VDP shows, read back from it
@@ -106,6 +107,10 @@ static const struct {
     { "back", 127, VK_BACKSPACE, 0 }, { "del", 0, VK_DELETE, 0 },
     { "alt+left", 0, VK_LEFT, MOD_ALT }, { "alt+right", 0, VK_RIGHT, MOD_ALT },
     { "f1", 0, VK_F1, 0 },            { "f3", 0, VK_F3, 0 },
+    { "ctrl+up", 0, VK_UP, MOD_CTRL },  { "ctrl+down", 0, VK_DOWN, MOD_CTRL },
+    { "ctrl+left", 0, VK_LEFT, MOD_CTRL }, { "ctrl+right", 0, VK_RIGHT, MOD_CTRL },
+    { "ctrl+f", 6, VK_f, MOD_CTRL },  { "ctrl+n", 14, VK_n, MOD_CTRL },
+    { "ctrl+p", 16, VK_p, MOD_CTRL },
 };
 
 key in_wait(void)
@@ -162,20 +167,39 @@ key in_wait(void)
 int in_meaning(key k)
 {
     int alt = k.mods & MOD_ALT;
+    int ctrl = k.mods & MOD_CTRL;
 
     switch (k.vk) {
     case VK_UP:
     case VK_KP_UP:
-        return K_UP;
+        return ctrl ? K_HEAD_PREV : K_UP;
     case VK_DOWN:
     case VK_KP_DOWN:
-        return K_DOWN;
+        return ctrl ? K_HEAD_NEXT : K_DOWN;
     case VK_LEFT:
     case VK_KP_LEFT:
-        return alt ? K_HISTBACK : K_LEFT;
+        return ctrl ? K_LINK_PREV : alt ? K_HISTBACK : K_LEFT;
     case VK_RIGHT:
     case VK_KP_RIGHT:
-        return alt ? K_HISTFWD : K_RIGHT;
+        return ctrl ? K_LINK_NEXT : alt ? K_HISTFWD : K_RIGHT;
+    case VK_f:
+    case VK_F:
+        if (ctrl) {
+            return K_FIND_HERE;
+        }
+        break;
+    case VK_n:
+    case VK_N:
+        if (ctrl) {
+            return K_FIND_NEXT;
+        }
+        break;
+    case VK_p:
+    case VK_P:
+        if (ctrl) {
+            return K_FIND_PREV;
+        }
+        break;
     case VK_PAGEUP:
     case VK_KP_PAGEUP:
         return K_PGUP;
@@ -206,6 +230,12 @@ int in_meaning(key k)
     }
     /* Keys the VDP gives only as characters. */
     switch (k.ch) {
+    case 6:
+        return K_FIND_HERE;                 /* CTRL+F, N and P as characters */
+    case 14:
+        return K_FIND_NEXT;
+    case 16:
+        return K_FIND_PREV;
     case 13:
         return K_ENTER;
     case 27:

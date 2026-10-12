@@ -325,8 +325,15 @@ core at least).
   topic rather than sitting beside it -- at 80 columns a tree beside the
   text leaves neither enough room. `t` goes to the contents at the topic's
   own node, Esc comes back.
-- **Keys**: as planned, plus Tab / Shift+Tab to choose a link, Left/Right to
-  scroll code and tables sideways, `n`/`p` for the next and previous topic,
+- **Keys**: as planned, and a hypertext browser's: Ctrl+Up/Down select the
+  previous or next heading (highlighted, brought to the top of the screen),
+  Ctrl+Left/Right (or Shift+Tab/Tab) the previous or next link, Enter
+  follows it. Ctrl+F finds words as aed does -- a prompt on the bottom row
+  holding the last search, Enter to find, ignoring case, within a line,
+  Ctrl+N / Ctrl+P for the next and previous match, wrapping, "Not found"
+  until a key -- but from the top of the screen on, and with spaces
+  allowed in the prompt (aed's prompt drops them). Left/Right scroll code
+  and tables sideways, `n`/`p` for the next and previous topic,
   `u` for the section a topic is in, `?` or F1 for help. Keys come from
   agondev's event queue, so each carries its modifiers as they were.
 - **The command line**, as planned, plus `-p` (print what was found instead

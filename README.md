@@ -42,8 +42,11 @@ Reading a topic:
 |---|---|
 | Up, Down, PgUp, PgDn, Home, End | scroll (Space and `b` page too) |
 | Left, Right | scroll code and tables sideways |
-| Tab, Shift+Tab | choose the next or previous link |
-| Enter | follow it |
+| Ctrl+Up, Ctrl+Down | the previous or next heading |
+| Ctrl+Left, Ctrl+Right (or Shift+Tab, Tab) | the previous or next link |
+| Enter | follow the link |
+| Ctrl+F | find words, from the top of the screen on, as aed finds |
+| Ctrl+N, Ctrl+P | the next or previous match |
 | Backspace, Alt+Left / Alt+Right | back / forward |
 | `n`, `p` | the next or previous topic |
 | `u` | the section the topic is in |

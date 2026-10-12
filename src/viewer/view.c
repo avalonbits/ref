@@ -25,6 +25,13 @@ static int hscroll;
 static int sel = -1;                /* the selected link: its line, or -1 */
 static int sel_col;                 /* and the column it starts at there */
 static uint16_t sel_target;
+static int hsel = -1;               /* the selected heading: its first line, or -1 */
+static int mline = -1;              /* the find's match: its line, or -1 */
+static int mcol;                    /* where it starts there, in visible characters */
+static int mlen;
+#define FIND_MAX 40
+static char ftext[FIND_MAX + 1];    /* the last thing found, kept between topics */
+static int hsel_last;               /* and its last, when it wraps */
 
 static place back[HISTORY];
 static int nback;
@@ -56,6 +63,8 @@ static int load(unsigned num)
     top = 0;
     hscroll = 0;
     sel = -1;
+    hsel = -1;
+    mline = -1;
 
     return 0;
 }
@@ -113,6 +122,7 @@ static void draw_line(int row, int idx)
     uint8_t style;
     uint16_t link;
     int lit;                        /* the link being drawn is the selected one */
+    int vis;                        /* visible characters so far on the line */
 
     scr_begin(row);
     if (idx >= nlines) {
@@ -149,9 +159,11 @@ static void draw_line(int row, int idx)
     link = ln->link;
     lit = link != REF_NONE && carried_selected(idx);
     skip = ln->kind == REF_PRE ? hscroll : 0;
+    vis = 0;
     for (k = ln->start; k < ln->end; k = REF_SKIP(t, k)) {
         unsigned c = t[k];
         int role;
+        int here;
 
         switch (c) {
         case REF_EM_ON:
@@ -178,14 +190,17 @@ static void draw_line(int row, int idx)
         if (c < 0x20) {
             continue;
         }
+        here = vis++;
         if (skip > 0) {
             skip--;
             continue;
         }
-        if (link != REF_NONE) {
+        if (idx == mline && here >= mcol && here < mcol + mlen) {
+            role = C_SEL;                   /* the find's match */
+        } else if (link != REF_NONE) {
             role = lit ? C_SEL : C_LINK;
         } else if (ln->kind == REF_HEAD) {
-            role = C_HEAD;
+            role = idx >= hsel && idx <= hsel_last && hsel >= 0 ? C_SEL : C_HEAD;
         } else if (style & REF_ST_CODE) {
             role = C_CODE;
         } else if (style & REF_ST_EM) {
@@ -295,7 +310,8 @@ static void draw(void)
     }
     draw_status();
 #ifdef REF_SCRIPT
-    script_log("view topic %d top %d lines %d sel %d:%d", cur, top, nlines, sel, sel_col);
+    script_log("view topic %d top %d lines %d sel %d:%d head %d", cur, top, nlines, sel, sel_col,
+               hsel);
 #endif
 }
 
@@ -431,6 +447,50 @@ static void scroll_to(int t)
     if (sel >= 0 && (sel < top || sel >= top + scr_rows)) {
         sel = -1;
     }
+    if (hsel >= 0 && (hsel_last < top || hsel >= top + scr_rows)) {
+        hsel = -1;
+    }
+}
+
+/* Does a heading start at line i? (A heading that wraps is several HEAD
+ * lines in a row; a blank line always comes between two headings.) */
+static int heading_at(int i)
+{
+    return lines[i].kind == REF_HEAD && (i == 0 || lines[i - 1].kind != REF_HEAD);
+}
+
+/* Select the next heading (dir 1) or the one before (-1) from the selected
+ * one, or from the top of the screen, and bring it to the top. 0 if there
+ * is none that way. */
+static int step_heading(int dir)
+{
+    int i;
+
+    if (dir > 0) {
+        i = hsel >= 0 ? hsel_last + 1 : top;
+        while (i < nlines && !heading_at(i)) {
+            i++;
+        }
+    } else {
+        i = hsel >= 0 ? hsel - 1 : top;
+        while (i >= 0 && !heading_at(i)) {
+            i--;
+        }
+    }
+    if (i < 0 || i >= nlines) {
+        return 0;
+    }
+    hsel = i;
+    hsel_last = i;
+    while (hsel_last + 1 < nlines && lines[hsel_last + 1].kind == REF_HEAD) {
+        hsel_last++;
+    }
+    scroll_to(i);
+    if (hsel < top || hsel >= top + scr_rows) {
+        top = hsel;                         /* the last screen: still show it */
+    }
+
+    return 1;
 }
 
 static int history(place* from, int* nfrom, place* to, int* nto)
@@ -451,6 +511,163 @@ static int history(place* from, int* nfrom, place* to, int* nto)
     scroll_to(p.top);
 
     return 1;
+}
+
+/* --- finding on the screen ------------------------------------------------------- */
+
+/* Line i's visible characters, lower case, into buf: how many. */
+static int line_text(int i, char* buf, int size)
+{
+    const ref_line* ln = &lines[i];
+    const uint8_t* t = book.view;
+    unsigned k;
+    int n = 0;
+
+    for (k = ln->start; k < ln->end && n < size; k = REF_SKIP(t, k)) {
+        int c = t[k];
+
+        if (c >= 0x20) {
+            buf[n++] = (char)(c >= 'A' && c <= 'Z' ? c + 32 : c);
+        }
+    }
+
+    return n;
+}
+
+/* Find ftext from the match (or the top of the screen), forward (dir 1) or
+ * back, wrapping round the topic; a match never spans lines. 1 if found. */
+static int find_step(int dir)
+{
+    static char buf[512];
+    static char want[FIND_MAX + 1];
+    int wl = (int)strlen(ftext);
+    int i;
+    int from;
+    int tries;
+
+    if (wl == 0 || nlines == 0) {
+        return 0;
+    }
+    for (i = 0; i <= wl; i++) {
+        int c = (unsigned char)ftext[i];
+
+        want[i] = (char)(c >= 'A' && c <= 'Z' ? c + 32 : c);
+    }
+    if (mline >= 0) {
+        i = mline;
+        from = dir > 0 ? mcol + 1 : mcol - 1;
+    } else {
+        i = dir > 0 ? top : (top + scr_rows - 1 < nlines ? top + scr_rows - 1 : nlines - 1);
+        from = dir > 0 ? 0 : 0x7fff;
+    }
+    for (tries = 0; tries <= nlines; tries++) {
+        int n = line_text(i, buf, (int)sizeof buf);
+        int x;
+
+        if (dir > 0) {
+            for (x = from < 0 ? 0 : from; x + wl <= n; x++) {
+                if (memcmp(buf + x, want, (size_t)wl) == 0) {
+                    break;
+                }
+            }
+            if (x + wl <= n) {
+                mline = i;
+                mcol = x;
+                mlen = wl;
+
+                return 1;
+            }
+            i = i + 1 < nlines ? i + 1 : 0;
+            from = 0;
+        } else {
+            for (x = (from > n - wl ? n - wl : from); x >= 0; x--) {
+                if (memcmp(buf + x, want, (size_t)wl) == 0) {
+                    break;
+                }
+            }
+            if (x >= 0) {
+                mline = i;
+                mcol = x;
+                mlen = wl;
+
+                return 1;
+            }
+            i = i > 0 ? i - 1 : nlines - 1;
+            from = 0x7fff;
+        }
+    }
+
+    return 0;
+}
+
+/* After a search: the match on screen (in the middle, if it was off it), or
+ * "Not found" on the bottom row until a key. */
+static void show_find(int found)
+{
+    if (found) {
+        if (mline < top || mline >= top + scr_rows) {
+            scroll_to(mline - scr_rows / 2);
+        }
+#ifdef REF_SCRIPT
+        script_log("find '%s' at %d:%d", ftext, mline, mcol);
+#endif
+
+        return;
+    }
+    mline = -1;
+    scr_begin(scr_rows);
+    scr_colour(C_STATUS);
+    scr_adds(" Not found: ");
+    scr_adds(ftext);
+    scr_end();
+#ifdef REF_SCRIPT
+    script_log("find '%s' not found", ftext);
+#endif
+    in_wait();
+}
+
+/* CTRL+F: the prompt on the bottom row, holding the last search, as aed's.
+ * Enter finds; Esc, or Enter with nothing typed, cancels. Spaces can be
+ * typed: a search may be several words. */
+static void find_prompt(void)
+{
+    static char text[FIND_MAX + 1];
+
+    strcpy(text, ftext);
+    for (;;) {
+        key k;
+        int m;
+        int len = (int)strlen(text);
+
+        scr_begin(scr_rows);
+        scr_colour(C_STATUS);
+        scr_adds(" Find: ");
+        scr_adds(text);
+        scr_end();
+        scr_cursor(7 + len, scr_rows, 1);
+        k = in_wait();
+        m = in_meaning(k);
+        if (m == K_ESC || (m == K_ENTER && len == 0)) {
+            scr_cursor(0, 0, 0);
+
+            return;
+        }
+        if (m == K_ENTER) {
+            scr_cursor(0, 0, 0);
+            strcpy(ftext, text);
+            mline = -1;                     /* from the top of the screen */
+            show_find(find_step(1));
+
+            return;
+        }
+        if (m == K_BACK && len > 0) {
+            text[len - 1] = 0;
+        } else if ((m == K_CHAR || k.ch == ' ') && k.ch >= 0x20 && k.ch < 0x7f
+                   && len < FIND_MAX) {
+            text[len] = (char)k.ch;
+            text[len + 1] = 0;
+        }
+    }
 }
 
 int view_loop(void)
@@ -495,10 +712,27 @@ int view_loop(void)
             hscroll += HSTEP;
             break;
         case K_TAB:
+        case K_LINK_NEXT:
             redraw = step_link(1);
             break;
         case K_BACKTAB:
+        case K_LINK_PREV:
             redraw = step_link(-1);
+            break;
+        case K_FIND_HERE:
+            find_prompt();
+            break;
+        case K_FIND_NEXT:
+        case K_FIND_PREV:
+            if (ftext[0]) {
+                show_find(find_step(m == K_FIND_NEXT ? 1 : -1));
+            }
+            break;
+        case K_HEAD_NEXT:
+            redraw = step_heading(1);
+            break;
+        case K_HEAD_PREV:
+            redraw = step_heading(-1);
             break;
         case K_ENTER:
             if (sel < 0 && !step_link(1)) {

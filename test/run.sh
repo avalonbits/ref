@@ -107,7 +107,7 @@ dump:forward")
 check "ref -k vdu 23 27 3 opens Draw current bitmap" \
       "$(dump "$t" open | head -1)" \
       "VDU 23, 27, 3, x; y;: Draw current bitmap on screen at pixel position x, y"
-check "  Tab selects its first link" "$(grep -c '^view topic 502 top 0 lines 22 sel 4:20$' <<< "$t")" 1
+check "  Tab selects its first link" "$(grep -c '^view topic 502 top 0 lines 22 sel 4:20 ' <<< "$t")" 1
 check "  Enter follows it" "$(dump "$t" link | head -1)" "Bitmap plots (PLOT codes &E8-&EF)"
 check "  the status line says where it is" \
       "$(dump "$t" link | tail -1 | sed 's/  *[0-9]*%$//')" \
@@ -116,6 +116,54 @@ check "  Backspace goes back" "$(dump "$t" back | head -1)" \
       "VDU 23, 27, 3, x; y;: Draw current bitmap on screen at pixel position x, y"
 check "  Alt+Right goes forward again" "$(dump "$t" forward | head -1)" \
       "Bitmap plots (PLOT codes &E8-&EF)"
+
+# --- a hypertext: headings, links and finding with CTRL ---
+t=$(scripted "ref -k copper" "down
+enter
+ctrl+down
+ctrl+down
+ctrl+down
+dump:third
+ctrl+up
+dump:back")
+check "Ctrl+Down selects each heading in turn, at the top of the screen" \
+      "$(grep -c '^view topic 602 top 34 lines 169 sel -1:0 head 34$' <<< "$t")" 2
+check "  the third is Copper API Commands" "$(dump "$t" third | head -1)" "Copper API Commands"
+check "  Ctrl+Up goes back to the one before" "$(dump "$t" back | head -1)" "How it works"
+t=$(scripted "ref -k VDU 23,0,&A0,1;6" "ctrl+right
+ctrl+right
+ctrl+left
+ctrl+f
+text:buffer 12
+enter
+dump:found
+ctrl+n
+ctrl+p
+ctrl+f
+back
+back
+back
+back
+back
+back
+back
+back
+back
+text:zzzz
+enter
+dump:notfound")
+check "Ctrl+Right and Ctrl+Left step through the links" \
+      "$(grep -o 'sel [0-9]*:[0-9]*' <<< "$t" | sed -n '1,3p' | tr '\n' ' ')" "sel 30:25 sel 44:37 sel 30:25 "
+check "Ctrl+F finds words, spaces and all, and shows them" \
+      "$(grep -m1 "^find " <<< "$t")" "find 'buffer 12' at 87:30"
+check "  the match is on the screen" "$(dump "$t" found | grep -c 'buffer 12')" 2
+check "  Ctrl+N goes to the next, Ctrl+P back" \
+      "$(grep -o "at [0-9]*:" <<< "$t" | tr '\n' ' ')" "at 87: at 91: at 87: "
+t2=$(scripted "ref -k VDU 23,0,&A0,1;6" "ctrl+f
+text:COMBINING THE ABOVE
+enter")
+check "  ignoring case: COMBINING THE ABOVE finds Combining the above" "$(grep -c "^find 'COMBINING THE ABOVE' at " <<< "$t2")" 1
+check "  and a word that is not there says so" "$(dump "$t" notfound | grep -c '^ Not found: zzzz$')" 1
 
 # --- scrolling a long topic ---
 t=$(scripted "ref -k VDU 23,0,&A0,1;6" "dump:top
