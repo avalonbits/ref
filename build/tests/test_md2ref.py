@@ -428,6 +428,20 @@ class Md2ref(unittest.TestCase):
         self.assertEqual(ask(data, 'search', ['foobar', 'ablnkok', 'one', 'two', 'onetwo']).splitlines(),
                          ['1 0:0:1', '1 0:0:1', '1 0:0:1', '1 0:0:1', '0'])
 
+    def test_runs_of_spaces_are_one(self):
+        # In plain text, in a code span and across a line's end alike.
+        p, data, left = compile_pages({'index.md': '# T\n\na   b `c   d`  e\n   f\n'})
+        self.assertEqual(p.returncode, 0, p.stdout)
+        self.assertIn(b'a b \x12c d\x13 e f', b''.join(views(data)))
+
+    def test_inline_markup_straight_after_text(self):
+        # Each thing inline Markdown starts with, right after plain text.
+        p, data, left = compile_pages({'index.md': '# T\n\nx\\*y z<br>w v![pic](p.png) u _em_ s *st* '
+                                                   'r`c` q\n'})
+        self.assertEqual(p.returncode, 0, p.stdout)
+        self.assertIn(b'x*y z\x0bw v[Image: pic] u \x10em\x11 s \x10st\x11 r\x12c\x13 q',
+                      b''.join(views(data)))
+
     def test_words_past_one_run(self):
         # More words than one 16 KB run of the words file holds: sorted in
         # runs, merged, every word still finds its topic.

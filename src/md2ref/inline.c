@@ -114,13 +114,71 @@ static void put_char(int c)
     put(c);
 }
 
+static int plain_run(const char* text, int k, int n, const uint8_t* stop);
+static uint8_t not_ascii[256];      /* only what agon_char changes */
+
 static void put_text(const char* s, int len)
 {
-    const char* e = s + len;
+    int k = 0;
 
-    while (s < e) {
-        put_char(agon_char(&s));
+    while (k < len) {
+        k = plain_run(s, k, len, not_ascii);
+        if (k < len) {
+            const char* p = s + k;
+
+            put_char(agon_char(&p));
+            k = (int)(p - s);
+        }
     }
+}
+
+/* The bytes that are not plain text as they are: what inlines looks at,
+ * controls, and what agon_char changes. */
+static uint8_t special[256];
+
+static void make_special(void)
+{
+    const char* m = "\\`<![*_";
+    int c;
+
+    for (c = 0; c < 256; c++) {
+        not_ascii[c] = special[c] = (uint8_t)(c < 0x20 || c >= 0x7F);
+    }
+    while (*m) {
+        special[(uint8_t)*m++] = 1;
+    }
+}
+
+/* Text from k on, to the next byte stop says is not plain: most of every
+ * page, put here in a tight loop -- a space after a space is dropped, as
+ * put_char does -- and not a call or two a byte. Where it stops. */
+static int plain_run(const char* text, int k, int n, const uint8_t* stop)
+{
+    const uint8_t* s = (const uint8_t*)text + k;
+    const uint8_t* e = (const uint8_t*)text + n;
+    int w = written;
+    int sp = last_space;
+
+    while (s < e && !stop[*s]) {
+        uint8_t c = *s++;
+
+        if (c == ' ') {
+            if (sp) {
+                continue;
+            }
+            sp = 1;
+        } else {
+            sp = 0;
+        }
+        if (w < room) {
+            out[w] = c;
+        }
+        w++;
+    }
+    written = w;
+    last_space = sp;
+
+    return (int)((const char*)s - text);
 }
 
 /* --- scanning --------------------------------------------------------------------- */
@@ -408,13 +466,16 @@ static void inlines(const char* s, int n, int in_link)
             const char* p = s + k;
 
             put_char(agon_char(&p));
-            k = (int)(p - s);
+            k = plain_run(s, (int)(p - s), n, special);
         }
     }
 }
 
 int inline_markup(const page* p, int no, const char* s, uint8_t* o, int size, link_fn links)
 {
+    if (!special[0]) {
+        make_special();
+    }
     out = o;
     room = size;
     written = 0;
