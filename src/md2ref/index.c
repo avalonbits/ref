@@ -456,90 +456,209 @@ void make_keys(void)
  * fit RUN bytes, merged a small window per run. However many different
  * words a document has, the memory is the same. */
 
-#define RUN      24576      /* records sorted in memory at once */
+#define RUN      16384      /* records sorted in memory at once: their offsets are 16 bits */
 #define RUN_WIN  512        /* a run's window, merging */
 #define MAX_RUNS 64
 
-/* The topic's words: a flag byte, the word, a NUL, one after another. */
-static char* wbuf;
+/* The topic's words, each once, as the records they go out as: one after
+ * another in wbuf, found again through a hash of them. A word said again
+ * adds nothing but, in the title, the title's bit. */
+static uint8_t* wbuf;
 static unsigned wlen;
 static unsigned wcap;
-static unsigned* occ;
-static unsigned nocc;
-static unsigned occ_cap;
-static int word_topic;
+static uint16_t* slot;              /* a record's offset in wbuf + 1; 0 for none */
+static unsigned nslots;             /* a power of two, at least twice the words */
+static unsigned slot_cap;
+static unsigned nwords;
+static unsigned word_topic;
+static uint16_t mix[256];
 
-static void text_word(const char* key, int len, int topic, int in_title)
+#define FIRST_SLOTS 64
+
+/* Of the bytes of a word that tell words apart most: adds and lookups,
+ * which the eZ80 does in line, where a multiply or a shift is a call. */
+static unsigned word_hash(const uint8_t* w, unsigned len)
 {
+    return mix[w[0]] + mix[(uint8_t)(w[len - 1] + len)] + mix[(uint8_t)(w[1] ^ w[len >> 1] ^ 0xA5)];
+}
+
+static void place(unsigned at)
+{
+    unsigned mask = nslots - 1;
+    unsigned h = word_hash(wbuf + at + 1, wbuf[at]) & mask;
+
+    while (slot[h]) {
+        h = (h + 1) & mask;
+    }
+    slot[h] = (uint16_t)(at + 1);
+}
+
+static void more_slots(void)
+{
+    unsigned at;
+
+    nslots *= 2;
+    if (nslots > slot_cap) {
+        slot_cap = nslots;
+        slot = md_realloc(slot, slot_cap * (unsigned)sizeof(uint16_t));
+    }
+    memset(slot, 0, nslots * sizeof(uint16_t));
+    for (at = 0; at < wlen; at += 1u + wbuf[at] + 2u) {
+        place(at);
+    }
+}
+
+static void text_word(const char* word, int len, int topic, int in_title)
+{
+    const uint8_t* key = (const uint8_t*)word;
+    unsigned mask = nslots - 1;
+    unsigned h = word_hash(key, (unsigned)len) & mask;
+    unsigned at;
+
     (void)topic;
-    if (wlen + (unsigned)len + 2 > wcap) {
-        wcap = (wlen + (unsigned)len + 2) * 2;
+    while ((at = slot[h]) != 0) {
+        uint8_t* r = wbuf + at - 1;
+
+        if (r[0] == len && memcmp(r + 1, key, (size_t)len) == 0) {
+            r[1 + len + 1] |= (uint8_t)(in_title << 7);
+
+            return;
+        }
+        h = (h + 1) & mask;
+    }
+    if (wlen + (unsigned)len + 3 > wcap) {
+        wcap = (wlen + (unsigned)len + 3) * 2;
         wbuf = md_realloc(wbuf, wcap);
     }
-    if (nocc == occ_cap) {
-        occ_cap = occ_cap ? occ_cap * 2 : 256;
-        occ = md_realloc(occ, occ_cap * (unsigned)sizeof(unsigned));
+    at = wlen;
+    wbuf[at] = (uint8_t)len;
+    memcpy(wbuf + at + 1, key, (size_t)len);
+    wbuf[at + 1 + len] = (uint8_t)(word_topic & 0xFF);
+    wbuf[at + 2 + len] = (uint8_t)(word_topic >> 8 | (unsigned)in_title << 7);
+    wlen += 1u + (unsigned)len + 2u;
+    slot[h] = (uint16_t)(at + 1);
+    if (++nwords * 2 > nslots) {
+        more_slots();
     }
-    occ[nocc++] = wlen;
-    wbuf[wlen++] = (char)in_title;
-    memcpy(wbuf + wlen, key, (size_t)len);
-    wlen += (unsigned)len;
-    wbuf[wlen++] = 0;
 }
 
 void words_begin(int t)
 {
-    word_topic = topics[t].made;
+    if (!slot) {
+        unsigned k;
+        uint32_t v = 1;
+
+        for (k = 0; k < 256; k++) {
+            v = v * 1103515245UL + 12345;       /* once, so the cost is no matter */
+            mix[k] = (uint16_t)(v >> 8);
+        }
+        slot_cap = FIRST_SLOTS;
+        slot = md_realloc(NULL, slot_cap * (unsigned)sizeof(uint16_t));
+    }
+    word_topic = (unsigned)topics[t].made;
     wlen = 0;
-    nocc = 0;
+    nwords = 0;
+    nslots = FIRST_SLOTS;
+    memset(slot, 0, nslots * sizeof(uint16_t));
 }
 
 void words_text(const char* plain, int in_title)
 {
-    each_word(plain, 3, text_word, word_topic, in_title);
-}
-
-static int by_occ(const void* a, const void* b)
-{
-    return strcmp(wbuf + *(const unsigned*)a + 1, wbuf + *(const unsigned*)b + 1);
+    each_word(plain, 3, text_word, (int)word_topic, in_title);
 }
 
 void words_end(void)
 {
-    unsigned k = 0;
-
-    if (nocc) {
-        qsort(occ, nocc, sizeof(unsigned), by_occ);
-    }
-    while (k < nocc) {
-        const char* key = wbuf + occ[k] + 1;
-        unsigned in_title = 0;
-        unsigned klen = (unsigned)strlen(key);
-        unsigned tf;
-        uint8_t r[3];
-
-        while (k < nocc && strcmp(wbuf + occ[k] + 1, key) == 0) {
-            in_title |= (unsigned)wbuf[occ[k]];
-            k++;
-        }
-        tf = (unsigned)word_topic | in_title << 15;
-        r[0] = (uint8_t)klen;
-        words_put(r, 1);
-        words_put((const uint8_t*)key, klen);
-        r[1] = (uint8_t)(tf & 0xFF);
-        r[2] = (uint8_t)(tf >> 8);
-        words_put(r + 1, 2);
-    }
-    nocc = 0;
+    words_put(wbuf, wlen);
     wlen = 0;
+    nwords = 0;
 }
 
 /* --- sorting the words file ---------------------------------------------------- */
 
 static uint8_t* run;                /* RUN bytes */
-static unsigned* rec;               /* its records' offsets */
+
+/* A run's records, to be sorted: where each is in the run. */
+static uint16_t* rec;
+static uint16_t* rec_tmp;
 static unsigned nrec;
 static unsigned rec_cap;
+
+/* a's word after b's: from the fourth letter on, where every word has
+ * three and the radix passes have settled those. */
+static int rec_after(unsigned a, unsigned b)
+{
+    const uint8_t* p = run + a;
+    const uint8_t* q = run + b;
+    unsigned la = p[0];
+    unsigned lb = q[0];
+    unsigned n = (la < lb ? la : lb) - 3;
+
+    p += 4;
+    q += 4;
+    while (n && *p == *q) {
+        p++;
+        q++;
+        n--;
+    }
+
+    return n ? *p > *q : la > lb;
+}
+
+/* One stable counting pass on each record's byte at d. The counts are 16
+ * bits, as indexing them is then an add, where 24 bits is a multiply. */
+static void radix_pass(const uint16_t* from, uint16_t* to, unsigned d)
+{
+    static uint16_t pos[256];
+    unsigned i;
+    unsigned sum = 0;
+
+    memset(pos, 0, sizeof pos);
+    for (i = 0; i < nrec; i++) {
+        pos[run[from[i] + d]]++;
+    }
+    for (i = 0; i < 256; i++) {
+        unsigned c = pos[i];
+
+        pos[i] = (uint16_t)sum;
+        sum += c;
+    }
+    for (i = 0; i < nrec; i++) {
+        uint16_t r = from[i];
+
+        to[pos[run[r + d]]++] = r;
+    }
+}
+
+/* The run's records in order: by their first three letters, a stable
+ * counting pass each from the third back, which is linear; then the few
+ * that share all three, by inserting. */
+static void sort_run(void)
+{
+    unsigned i;
+
+    radix_pass(rec, rec_tmp, 3);
+    radix_pass(rec_tmp, rec, 2);
+    radix_pass(rec, rec_tmp, 1);
+    for (i = 1; i < nrec; i++) {
+        uint16_t x = rec_tmp[i];
+        const uint8_t* p = run + x + 1;
+        unsigned j = i;
+
+        while (j > 0) {
+            uint16_t y = rec_tmp[j - 1];
+            const uint8_t* q = run + y + 1;
+
+            if (p[0] != q[0] || p[1] != q[1] || p[2] != q[2] || !rec_after(y, x)) {
+                break;
+            }
+            rec_tmp[j] = y;
+            j--;
+        }
+        rec_tmp[j] = x;
+    }
+    memcpy(rec, rec_tmp, nrec * sizeof(uint16_t));
+}
 
 static int key_cmp(const uint8_t* a, const uint8_t* b)
 {
@@ -550,17 +669,13 @@ static int key_cmp(const uint8_t* a, const uint8_t* b)
     return c ? c : (int)la - (int)lb;
 }
 
-static int by_rec(const void* a, const void* b)
-{
-    return key_cmp(run + *(const unsigned*)a, run + *(const unsigned*)b);
-}
-
 typedef struct {
     unsigned long pos;      /* the next byte to read, in the runs file */
     unsigned long end;
     uint8_t buf[RUN_WIN];
     unsigned have;
     unsigned at;            /* the current record in buf */
+    unsigned first;         /* its first two letters */
 } window;
 
 /* The run's current record whole in its window: 1, or 0 at the run's end. */
@@ -586,6 +701,11 @@ static int ready(window* w)
     }
 
     return rest >= 3 && rest >= 1u + w->buf[0 + w->at] + 2u;
+}
+
+static unsigned first_of(const window* w)
+{
+    return (unsigned)w->buf[w->at + 1] << 8 | w->buf[w->at + 2];
 }
 
 /* The words file sorted into runs in the runs file: how many, or -1. */
@@ -616,10 +736,11 @@ static int make_runs(unsigned long* starts)
             unsigned size = 1u + in[at] + 2u;
 
             if (nrec == rec_cap) {
-                rec_cap = rec_cap ? rec_cap * 2 : 1024;
-                rec = md_realloc(rec, rec_cap * (unsigned)sizeof(unsigned));
+                rec_cap += 512;             /* not doubled: this is when memory is fullest */
+                rec = md_realloc(rec, rec_cap * (unsigned)sizeof(uint16_t));
+                rec_tmp = md_realloc(rec_tmp, rec_cap * (unsigned)sizeof(uint16_t));
             }
-            rec[nrec++] = used;
+            rec[nrec++] = (uint16_t)used;
             memcpy(run + used, in + at, size);
             used += size;
             at += size;
@@ -634,7 +755,7 @@ static int make_runs(unsigned long* starts)
 
             return -1;
         }
-        qsort(rec, nrec, sizeof(unsigned), by_rec);
+        sort_run();
         starts[nruns++] = runs_size();
         for (k = 0; k < nrec; k++) {
             runs_put(run + rec[k], 1u + run[rec[k]] + 2u);
@@ -684,7 +805,10 @@ int write_words(void (*emit)(const void* p, unsigned n))
     static uint8_t key[WORD_MAX + 1];
     static uint8_t prev[WORD_MAX + 1];
     static uint8_t out[16];
+    static unsigned eq[MAX_RUNS];
     window* win;
+    int* live;
+    unsigned nlive;
     uint16_t* v = NULL;
     unsigned vcap = 0;
     unsigned dmax = 0;
@@ -700,7 +824,8 @@ int write_words(void (*emit)(const void* p, unsigned n))
     free(run);
     run = NULL;
     free(rec);
-    rec = NULL;
+    free(rec_tmp);
+    rec = rec_tmp = NULL;
     rec_cap = 0;
     if (nruns < 0) {
         return -1;
@@ -714,37 +839,69 @@ int write_words(void (*emit)(const void* p, unsigned n))
     prev[0] = 0;
 
     /* Merged: the least word of the runs' current records, from each run
-     * that has it, its topics gathered; then written. */
+     * that has it, its topics gathered; then written. live holds the runs
+     * not yet done, and first each one's current word's first two
+     * letters, which settle most comparisons. */
+    live = md_realloc(NULL, (unsigned)(nruns + 1) * (unsigned)sizeof(int));
+    nlive = 0;
+    for (r = 0; r < nruns; r++) {
+        if (ready(&win[r])) {
+            live[nlive++] = r;
+            win[r].first = first_of(&win[r]);
+        }
+    }
     for (;;) {
-        int least = -1;
+        int least;
         unsigned n = 0;
         unsigned klen;
         unsigned shared = 0;
         unsigned o;
         unsigned j;
         unsigned at_topic = 0;
+        unsigned neq = 0;
+        unsigned k;
 
-        for (r = 0; r < nruns; r++) {
-            if (ready(&win[r])
-                && (least < 0 || key_cmp(win[r].buf + win[r].at, win[least].buf + win[least].at) < 0)) {
-                least = r;
-            }
-        }
-        if (least < 0) {
+        if (nlive == 0) {
             break;
+        }
+        least = live[0];
+        eq[neq++] = 0;
+        for (k = 1; k < nlive; k++) {
+            window* w = &win[live[k]];
+            window* l = &win[least];
+            int c = w->first < l->first ? -1 : w->first > l->first ? 1
+                    : key_cmp(w->buf + w->at, l->buf + l->at);
+
+            if (c < 0) {
+                least = live[k];
+                neq = 0;
+                eq[neq++] = k;
+            } else if (c == 0) {
+                eq[neq++] = k;
+            }
         }
         klen = win[least].buf[win[least].at];
         memcpy(key, win[least].buf + win[least].at, klen + 1);
-        for (r = 0; r < nruns; r++) {
-            while (ready(&win[r]) && key_cmp(win[r].buf + win[r].at, key) == 0) {
-                const uint8_t* p = win[r].buf + win[r].at + 1 + klen;
+        for (j = 0; j < neq; j++) {
+            window* w = &win[live[eq[j]]];
+
+            do {
+                const uint8_t* p = w->buf + w->at + 1 + klen;
 
                 if (n == vcap) {
                     vcap = vcap ? vcap * 2 : 64;
                     v = md_realloc(v, vcap * (unsigned)sizeof(uint16_t));
                 }
                 v[n++] = (uint16_t)(p[0] | p[1] << 8);
-                win[r].at += 1 + klen + 2;
+                w->at += 1 + klen + 2;
+            } while (ready(w) && key_cmp(w->buf + w->at, key) == 0);
+            w->first = ready(w) ? first_of(w) : 0;
+        }
+        /* The runs that are done, out of live: from the back, so the
+         * indexes in eq still hold. */
+        for (j = neq; j-- > 0;) {
+            if (!ready(&win[live[eq[j]]])) {
+                live[eq[j]] = live[--nlive];
             }
         }
         n = tidy(v, n);
@@ -785,6 +942,7 @@ int write_words(void (*emit)(const void* p, unsigned n))
         words_section.count++;
     }
     words_section.blocks = (words_section.count + BLOCK - 1) / BLOCK;
+    free(live);
     free(win);
     free(v);
 

@@ -261,7 +261,7 @@ the end. So the text goes to a scratch file, and the document is written
 front to back once everything is known, the header last, into the space
 left for it. The words are never all in memory either. Each topic's
 distinct words go to a second scratch file. At the end it is sorted in
-24 KB runs into a third, and those are merged through a 512-byte window
+16 KB runs into a third, and those are merged through a 512-byte window
 each.
 
 All of agon-docs, 637 KB of Markdown and 721 topics, peaks at about

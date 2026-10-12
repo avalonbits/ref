@@ -9,7 +9,9 @@
 # writes them to $AGON_PROFILE. Each address goes to the function that
 # holds it: the globals from the link map, the statics from each object's
 # own symbols at its place in the map. Prints the total, the cycles per
-# byte of Markdown, and the functions that take the most.
+# byte of Markdown, and the functions that take the most. FUNC=<name>
+# also prints that function's disassembly, each instruction's cycles
+# beside it.
 set -uo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SCRATCH=$(mktemp -d)
@@ -41,9 +43,11 @@ console=$(EMU=$PROF_EMU emu_run "$sd" 1800)
 cycles=$(sed -n 's/.*Debug OUT(0x41): \([0-9]*\) CPU cycles.*/\1/p' <<< "$console" | head -1)
 [ -n "$cycles" ] && [ -s "$AGON_PROFILE" ] || { echo "no profile"; tail -5 <<< "$console"; exit 1; }
 
-python3 - "$ROOT/bin/md2ref-cycles/md2ref.map" "$AGON_PROFILE" "$cycles" "$bytes" "$TOP" <<'EOF'
+python3 - "$ROOT/bin/md2ref-cycles/md2ref.map" "$AGON_PROFILE" "$cycles" "$bytes" "$TOP" "${FUNC:-}" <<'EOF'
 import re, subprocess, sys, os
 mapfile, prof, cycles, nbytes, top = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5])
+func = sys.argv[6]
+objs = []
 nm = os.path.expanduser('~/agondev/bin/ez80-none-elf-nm')
 syms = {}
 section = None
@@ -54,12 +58,16 @@ for line in open(mapfile):
     m = re.match(r'^ \.text\s+0x([0-9a-f]+)\s+0x[0-9a-f]+\s+(\S+\.o)$', line)
     if m and section == '.text':
         base, obj = int(m.group(1), 16), m.group(2)
+        objs.append((base, obj))
         if os.path.exists(obj):
             out = subprocess.run([nm, obj], capture_output=True, text=True).stdout
             for l in out.splitlines():
                 p = l.split()
                 if len(p) == 3 and p[1] in 'tT':
-                    syms[base + int(p[0], 16)] = p[2].lstrip('_')
+                    name = p[2].lstrip('_')
+                    if p[1] == 't':     # a static: which file's
+                        name += ' (' + os.path.basename(obj)[:-2] + ')'
+                    syms[base + int(p[0], 16)] = name
         continue
     m = re.match(r'^\s+0x([0-9a-f]+)\s+(_\w+)$', line)
     if m and section == '.text':
@@ -67,16 +75,32 @@ for line in open(mapfile):
 addrs = sorted(syms)
 import bisect
 by = {}
+at = {}
 for l in open(prof):
     a, c = l.split()
     a, c = int(a, 16), int(c)
+    at[a] = c
     i = bisect.bisect_right(addrs, a) - 1
     name = syms[addrs[i]] if i >= 0 else '?'
     by[name] = by.get(name, 0) + c
 total = sum(by.values())
 print(f'{cycles} cycles, {nbytes} bytes: {cycles / nbytes:.0f} cycles a byte '
       f'({cycles / 18432000:.1f} s at 18.432 MHz, SD card reads not counted)')
-print(f'{"function":32} {"cycles":>14} {"%":>6} {"c/byte":>8}')
+print(f'{"function":40} {"cycles":>14} {"%":>6} {"c/byte":>8}')
 for name, c in sorted(by.items(), key=lambda kv: -kv[1])[:top]:
-    print(f'{name:32} {c:14} {100 * c / total:6.2f} {c / nbytes:8.1f}')
+    print(f'{name:40} {c:14} {100 * c / total:6.2f} {c / nbytes:8.1f}')
+if func:
+    start = next(a for a in addrs if syms[a] == func or syms[a].split(' (')[0] == func)
+    end = addrs[addrs.index(start) + 1]
+    base, obj = max((b, o) for b, o in objs if b <= start)
+    dis = subprocess.run([os.path.expanduser('~/agondev/bin/ez80-none-elf-objdump'), '-d',
+                          '--start-address=%d' % (start - base), '--stop-address=%d' % (end - base), obj],
+                         capture_output=True, text=True).stdout
+    print()
+    for l in dis.splitlines():
+        m = re.match(r'^\s+([0-9a-f]+):\s+(.*)$', l)
+        if m:
+            a = base + int(m.group(1), 16)
+            c = at.get(a, 0)
+            print(f'{c:12} {c / nbytes:7.1f}  {a:06x}  {m.group(2)}')
 EOF

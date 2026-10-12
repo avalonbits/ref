@@ -365,8 +365,19 @@ class Md2ref(unittest.TestCase):
                 self.assertIn('1. item %d one\n\n2. item %d two\n' % (k, k), text)
                 self.assertIn('| Note %d\n| body %d\n' % (k, k), text)
 
+    def test_a_topic_with_many_words_has_each_once(self):
+        # 200 words, each said twice: more than the topic's first table of
+        # them holds, so it grows. One is in the title as well, which
+        # marks it so however many times the text says it.
+        body = ' '.join('w%dz' % k for k in range(200))
+        p, data, left = compile_pages({'index.md': '# Doc w7z\n\n%s\n\n%s\n' % (body, body)})
+        self.assertEqual(p.returncode, 0, p.stdout)
+        self.assertIn('words 201\n', ask(data, 'info'))       # and doc
+        self.assertEqual(ask(data, 'search', ['w0z', 'w7z', 'w199z']).splitlines(),
+                         ['1 0:0:1', '1 0:1:1', '1 0:0:1'])
+
     def test_words_past_one_run(self):
-        # More words than one 24 KB run of the words file holds: sorted in
+        # More words than one 16 KB run of the words file holds: sorted in
         # runs, merged, every word still finds its topic.
         page = '# Words\n\n' + ''.join(
             '## T%d\n\n%s\n\n' % (k, ' '.join('w%dq%s' % (k, c) for c in 'abcdefghijklmnop'))
