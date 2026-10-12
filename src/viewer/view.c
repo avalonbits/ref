@@ -1,8 +1,11 @@
 /*
- * A topic on the screen: its text laid out to the width, scrolled a line,
- * a page or sideways (for code and tables wider than the screen), its links
- * chosen with Tab and followed with Enter, and a history to go back and
- * forward through.
+ * A topic on the screen, read as in a text-mode browser: a cursor moves
+ * through the text -- by line and character with the arrows, to the next
+ * heading or link with CTRL -- and the screen follows it. Whatever is under
+ * the cursor, a link or a heading, is lit in the selection's colour on that
+ * line alone; anywhere else the VDP's own text cursor shows where it is.
+ * Enter follows the link under the cursor, and the history keeps the
+ * cursor, so going back puts it on the link that was followed.
  */
 #include <string.h>
 
@@ -15,6 +18,8 @@
 typedef struct {
     uint16_t topic;
     uint16_t top;
+    uint16_t line;          /* the cursor's */
+    uint8_t col;
 } place;
 
 static ref_line lines[MAX_LINES];
@@ -22,16 +27,14 @@ static int nlines;
 static int cur = -1;
 static int top;
 static int hscroll;
-static int sel = -1;                /* the selected link: its line, or -1 */
-static int sel_col;                 /* and the column it starts at there */
-static uint16_t sel_target;
-static int hsel = -1;               /* the selected heading: its first line, or -1 */
+static int cl;                      /* the cursor: its line */
+static int cc;                      /* and its column, as on the screen */
+static int want;                    /* the column Up and Down keep to */
 static int mline = -1;              /* the find's match: its line, or -1 */
 static int mcol;                    /* where it starts there, in visible characters */
 static int mlen;
 #define FIND_MAX 40
 static char ftext[FIND_MAX + 1];    /* the last thing found, kept between topics */
-static int hsel_last;               /* and its last, when it wraps */
 
 static place back[HISTORY];
 static int nback;
@@ -62,8 +65,9 @@ static int load(unsigned num)
     cur = (int)num;
     top = 0;
     hscroll = 0;
-    sel = -1;
-    hsel = -1;
+    cl = 0;
+    cc = nlines ? lines[0].x : 0;
+    want = cc;
     mline = -1;
 
     return 0;
@@ -85,6 +89,8 @@ int view_open(unsigned num)
 
         p.topic = (uint16_t)cur;
         p.top = (uint16_t)top;
+        p.line = (uint16_t)cl;
+        p.col = (uint8_t)cc;
         push(back, &nback, p);
         nfwd = 0;
     }
@@ -94,22 +100,107 @@ int view_open(unsigned num)
 
 /* --- drawing ------------------------------------------------------------------ */
 
-/* Is the link that starts this line, carried from the line before, the
- * selected one? It is when every line back to the selection carries it. */
-static int carried_selected(int idx)
+/* The link at column col of line i, if there is one: its target, and the
+ * columns it covers on that line. A link wrapped onto the line counts from
+ * the line's start. */
+static int link_at(int i, int col, uint16_t* target, int* from, int* to)
 {
-    int j;
+    const ref_line* ln = &lines[i];
+    const uint8_t* t = book.view;
+    unsigned k;
+    int x = ln->x;
+    uint16_t link = ln->link;
+    int start = x;
 
-    if (sel < 0 || idx <= sel) {
+    if (i < 0 || i >= nlines || ln->kind == 0) {
         return 0;
     }
-    for (j = sel + 1; j <= idx; j++) {
-        if (lines[j].link != sel_target) {
-            return 0;
+    for (k = ln->start; k < ln->end; k = REF_SKIP(t, k)) {
+        if (t[k] == REF_LINK) {
+            link = (uint16_t)(t[k + 1] | t[k + 2] << 8);
+            start = x;
+        } else if (t[k] == REF_LINK_END) {
+            if (link != REF_NONE && col >= start && col < x) {
+                break;
+            }
+            link = REF_NONE;
+        } else if (t[k] >= 0x20) {
+            x++;
+        }
+    }
+    if (link == REF_NONE || col < start || col >= x) {
+        return 0;
+    }
+    *target = link;
+    *from = start;
+    *to = x;
+
+    return 1;
+}
+
+/* How far the cursor may go on line i: its indent, to its last character. */
+static int last_col(int i)
+{
+    const ref_line* ln = &lines[i];
+    const uint8_t* t = book.view;
+    unsigned k;
+    int n = 0;
+
+    if (ln->kind == 0 || ln->kind == REF_RULE) {
+        return ln->x;
+    }
+    for (k = ln->start; k < ln->end; k = REF_SKIP(t, k)) {
+        if (t[k] >= 0x20) {
+            n++;
         }
     }
 
-    return 1;
+    return ln->x + (n > 0 ? n - 1 : 0);
+}
+
+static int clamp_col(int i, int col)
+{
+    int last = last_col(i);
+
+    if (col > last) {
+        col = last;
+    }
+
+    return col < lines[i].x ? lines[i].x : col;
+}
+
+/* The cursor's place on the screen, sideways scrolling allowed for. */
+static int cursor_x(void)
+{
+    if (lines[cl].kind == REF_PRE) {
+        return cc - hscroll;
+    }
+
+    return cc;
+}
+
+/* Is the cursor on something lit -- a link or a heading -- rather than
+ * shown by the VDP's text cursor? */
+static int cursor_lit(void)
+{
+    uint16_t t;
+    int a;
+    int b;
+
+    if (nlines == 0) {
+        return 0;
+    }
+
+    return lines[cl].kind == REF_HEAD || link_at(cl, cc, &t, &a, &b);
+}
+
+static void place_cursor(void)
+{
+    if (nlines == 0 || cursor_lit() || cl < top || cl >= top + scr_rows) {
+        scr_cursor(0, 0, 0);
+    } else {
+        scr_cursor(cursor_x(), cl - top, 1);
+    }
 }
 
 static void draw_line(int row, int idx)
@@ -121,7 +212,10 @@ static void draw_line(int row, int idx)
     int skip;
     uint8_t style;
     uint16_t link;
-    int lit;                        /* the link being drawn is the selected one */
+    int lit_from;                   /* the columns lit under the cursor */
+    int head_lit = 0;               /* a heading's line, lit to the edge */
+    int lit_to;
+    int at;                         /* the column of the text, before scrolling */
     int vis;                        /* visible characters so far on the line */
 
     scr_begin(row);
@@ -157,7 +251,16 @@ static void draw_line(int row, int idx)
     }
     style = ln->style;
     link = ln->link;
-    lit = link != REF_NONE && carried_selected(idx);
+    lit_from = lit_to = -1;
+    if (idx == cl) {
+        uint16_t target;
+
+        if (!link_at(cl, cc, &target, &lit_from, &lit_to) && ln->kind == REF_HEAD) {
+            lit_from = 0;                   /* the heading's line, all of it */
+            lit_to = 0x7fff;
+            head_lit = 1;
+        }
+    }
     skip = ln->kind == REF_PRE ? hscroll : 0;
     vis = 0;
     for (k = ln->start; k < ln->end; k = REF_SKIP(t, k)) {
@@ -180,27 +283,28 @@ static void draw_line(int row, int idx)
             continue;
         case REF_LINK:
             link = (uint16_t)(t[k + 1] | t[k + 2] << 8);
-            lit = sel == idx && col == sel_col;
             continue;
         case REF_LINK_END:
             link = REF_NONE;
-            lit = 0;
             continue;
         }
         if (c < 0x20) {
             continue;
         }
         here = vis++;
+        at = ln->x + here;
         if (skip > 0) {
             skip--;
             continue;
         }
-        if (idx == mline && here >= mcol && here < mcol + mlen) {
+        if (at >= lit_from && at < lit_to) {
+            role = C_SEL;                   /* under the cursor */
+        } else if (idx == mline && here >= mcol && here < mcol + mlen) {
             role = C_SEL;                   /* the find's match */
         } else if (link != REF_NONE) {
-            role = lit ? C_SEL : C_LINK;
+            role = C_LINK;
         } else if (ln->kind == REF_HEAD) {
-            role = idx >= hsel && idx <= hsel_last && hsel >= 0 ? C_SEL : C_HEAD;
+            role = C_HEAD;
         } else if (style & REF_ST_CODE) {
             role = C_CODE;
         } else if (style & REF_ST_EM) {
@@ -212,6 +316,9 @@ static void draw_line(int row, int idx)
         scr_add((int)c);
         col++;
     }
+    /* A heading under the cursor is a bar to the edge; a link or a match
+     * that ends the line is not. */
+    scr_colour(head_lit ? C_SEL : C_TEXT);
     scr_end();
 }
 
@@ -301,6 +408,20 @@ static void draw_status(void)
     scr_end();
 }
 
+static void log_view(int scrolled)
+{
+#ifdef REF_SCRIPT
+    if (scrolled) {
+        script_log("view topic %d top %d lines %d cur %d:%d scrolled %d", cur, top, nlines, cl, cc,
+                   scrolled);
+    } else {
+        script_log("view topic %d top %d lines %d cur %d:%d", cur, top, nlines, cl, cc);
+    }
+#else
+    (void)scrolled;
+#endif
+}
+
 static void draw(void)
 {
     int r;
@@ -309,44 +430,44 @@ static void draw(void)
         draw_line(r, top + r);
     }
     draw_status();
-#ifdef REF_SCRIPT
-    script_log("view topic %d top %d lines %d sel %d:%d head %d", cur, top, nlines, sel, sel_col,
-               hsel);
-#endif
+    place_cursor();
+    log_view(0);
 }
 
 #define SCROLLED 2
 
-/* After the text moved from line was to top: a short move scrolls the rows
- * on screen and draws only those that came into view; a long one redraws. */
-static void moved(int was)
+/* After the cursor moved from line was_cl, and the text from line was: a
+ * short move scrolls the rows on screen and draws only those that came into
+ * view, and the two lines the cursor left and reached; a long one redraws. */
+static void moved(int was, int was_cl)
 {
     int d = top - was;
     int r;
 
-    if (d == 0) {
-        return;
-    }
     if (d > SCROLL_MAX || d < -SCROLL_MAX) {
         draw();
 
         return;
     }
-    scr_scroll(0, d);
-    if (d > 0) {
-        for (r = scr_rows - d; r < scr_rows; r++) {
-            draw_line(r, top + r);
+    if (d) {
+        scr_scroll(0, d);
+        if (d > 0) {
+            for (r = scr_rows - d; r < scr_rows; r++) {
+                draw_line(r, top + r);
+            }
+        } else {
+            for (r = 0; r < -d; r++) {
+                draw_line(r, top + r);
+            }
         }
-    } else {
-        for (r = 0; r < -d; r++) {
-            draw_line(r, top + r);
-        }
+        draw_status();
     }
-    draw_status();
-#ifdef REF_SCRIPT
-    script_log("view topic %d top %d lines %d sel %d:%d scrolled %d", cur, top, nlines, sel,
-               sel_col, d);
-#endif
+    if (was_cl >= top && was_cl < top + scr_rows) {
+        draw_line(was_cl - top, was_cl);
+    }
+    draw_line(cl - top, cl);
+    place_cursor();
+    log_view(d);
 }
 
 /* --- links -------------------------------------------------------------------- */
@@ -380,22 +501,49 @@ static int line_links(int idx, int* cols, uint16_t* targets, int max)
 static int lcols[LINE_LINKS];
 static uint16_t ltargets[LINE_LINKS];
 
-/* Select the next link (dir 1) or the one before (-1) from the selection,
- * or from the top of the screen. 0 if there is none that way. */
+/* Keep the cursor's line on the screen, and its column, on a line of code
+ * or a table, inside the sideways scroll. */
+static void follow_cursor(void)
+{
+    int at;
+
+    if (cl < top) {
+        top = cl;
+    } else if (cl >= top + scr_rows) {
+        top = cl - scr_rows + 1;
+    }
+    if (lines[cl].kind == REF_PRE) {
+        at = cc - lines[cl].x;
+        if (at < hscroll) {
+            hscroll = at - at % HSTEP;
+        } else if (cc - hscroll >= scr_cols) {
+            hscroll = cc - scr_cols + HSTEP - (cc - scr_cols) % HSTEP;
+        }
+    }
+}
+
+static void cursor_to(int line, int col)
+{
+    cl = line < 0 ? 0 : line >= nlines ? nlines - 1 : line;
+    cc = clamp_col(cl, col);
+}
+
+/* The cursor to the next link (dir 1) or the one before (-1) -- its start,
+ * not a part of it wrapped onto another line. 0 if there is none that way. */
 static int step_link(int dir)
 {
-    int idx;
-    int from_col;
+    int idx = cl;
+    int from_col = cc;
 
-    if (sel >= 0) {
-        idx = sel;
-        from_col = sel_col;
-    } else {
-        idx = dir > 0 ? top : top + scr_rows - 1;
-        if (idx >= nlines) {
-            idx = nlines - 1;
+    {
+        /* On a link already: step from its start. */
+        uint16_t t;
+        int a;
+        int b;
+
+        if (link_at(cl, cc, &t, &a, &b)) {
+            from_col = a;
         }
-        from_col = dir > 0 ? -1 : 0x7fff;
     }
     while (idx >= 0 && idx < nlines) {
         int n = line_links(idx, lcols, ltargets, LINE_LINKS);
@@ -415,14 +563,10 @@ static int step_link(int dir)
             }
         }
         if (i >= 0 && i < n) {
-            sel = idx;
-            sel_col = lcols[i];
-            sel_target = ltargets[i];
-            if (sel < top) {
-                top = sel;
-            } else if (sel >= top + scr_rows) {
-                top = sel - scr_rows + 1;
-            }
+            cl = idx;
+            cc = lcols[i];
+            want = cc;
+            follow_cursor();
 
             return 1;
         }
@@ -444,12 +588,6 @@ static void scroll_to(int t)
         t = 0;
     }
     top = t;
-    if (sel >= 0 && (sel < top || sel >= top + scr_rows)) {
-        sel = -1;
-    }
-    if (hsel >= 0 && (hsel_last < top || hsel >= top + scr_rows)) {
-        hsel = -1;
-    }
 }
 
 /* Does a heading start at line i? (A heading that wraps is several HEAD
@@ -459,36 +597,22 @@ static int heading_at(int i)
     return lines[i].kind == REF_HEAD && (i == 0 || lines[i - 1].kind != REF_HEAD);
 }
 
-/* Select the next heading (dir 1) or the one before (-1) from the selected
- * one, or from the top of the screen, and bring it to the top. 0 if there
- * is none that way. */
+/* The cursor to the next heading (dir 1) or the one before (-1), brought to
+ * the top of the screen. 0 if there is none that way. */
 static int step_heading(int dir)
 {
-    int i;
+    int i = cl + dir;
 
-    if (dir > 0) {
-        i = hsel >= 0 ? hsel_last + 1 : top;
-        while (i < nlines && !heading_at(i)) {
-            i++;
-        }
-    } else {
-        i = hsel >= 0 ? hsel - 1 : top;
-        while (i >= 0 && !heading_at(i)) {
-            i--;
-        }
+    while (i >= 0 && i < nlines && !heading_at(i)) {
+        i += dir;
     }
     if (i < 0 || i >= nlines) {
         return 0;
     }
-    hsel = i;
-    hsel_last = i;
-    while (hsel_last + 1 < nlines && lines[hsel_last + 1].kind == REF_HEAD) {
-        hsel_last++;
-    }
+    cursor_to(i, 0);
+    want = cc;
     scroll_to(i);
-    if (hsel < top || hsel >= top + scr_rows) {
-        top = hsel;                         /* the last screen: still show it */
-    }
+    follow_cursor();                        /* the last screen: still show it */
 
     return 1;
 }
@@ -504,11 +628,16 @@ static int history(place* from, int* nfrom, place* to, int* nto)
     p = from[--(*nfrom)];
     here.topic = (uint16_t)cur;
     here.top = (uint16_t)top;
+    here.line = (uint16_t)cl;
+    here.col = (uint8_t)cc;
     push(to, nto, here);
     if (load(p.topic) != 0) {
         return 0;
     }
     scroll_to(p.top);
+    cursor_to(p.line, p.col);
+    want = cc;
+    follow_cursor();
 
     return 1;
 }
@@ -608,6 +737,9 @@ static void show_find(int found)
         if (mline < top || mline >= top + scr_rows) {
             scroll_to(mline - scr_rows / 2);
         }
+        cursor_to(mline, lines[mline].x + mcol);
+        want = cc;
+        follow_cursor();
 #ifdef REF_SCRIPT
         script_log("find '%s' at %d:%d", ftext, mline, mcol);
 #endif
@@ -670,6 +802,17 @@ static void find_prompt(void)
     }
 }
 
+/* The cursor down (n > 0) or up n lines, keeping to its column; a page
+ * moves the text with it. */
+static void cursor_lines(int n, int page)
+{
+    if (page) {
+        scroll_to(top + n);
+    }
+    cursor_to(cl + n, want);
+    follow_cursor();
+}
+
 int view_loop(void)
 {
     scr_cls();
@@ -678,46 +821,58 @@ int view_loop(void)
         key k = in_wait();
         int m = in_meaning(k);
         int redraw = 1;
-        int was = top;              /* for the scroll keys: where they started */
+        int was = top;              /* for a move: where the text and the */
+        int was_cl = cl;            /* cursor started */
+        int was_h = hscroll;
 
         switch (m) {
         case K_UP:
-            scroll_to(top - 1);
+            cursor_lines(-1, 0);
             redraw = SCROLLED;
             break;
         case K_DOWN:
-            scroll_to(top + 1);
+            cursor_lines(1, 0);
             redraw = SCROLLED;
             break;
         case K_PGUP:
-            scroll_to(top - (scr_rows - 1));
+            cursor_lines(-(scr_rows - 1), 1);
             redraw = SCROLLED;
             break;
         case K_PGDN:
-            scroll_to(top + (scr_rows - 1));
+            cursor_lines(scr_rows - 1, 1);
             redraw = SCROLLED;
             break;
         case K_HOME:
-            scroll_to(0);
+            top = 0;
+            cursor_to(0, 0);
+            want = cc;
             redraw = SCROLLED;
             break;
         case K_END:
             scroll_to(nlines);
+            cursor_to(nlines - 1, 0);
+            want = cc;
             redraw = SCROLLED;
             break;
         case K_LEFT:
-            hscroll = hscroll > HSTEP ? hscroll - HSTEP : 0;
+            cc = clamp_col(cl, cc - 1);
+            want = cc;
+            follow_cursor();
+            redraw = SCROLLED;
             break;
         case K_RIGHT:
-            hscroll += HSTEP;
+            cc = clamp_col(cl, cc + 1);
+            want = cc;
+            follow_cursor();
+            redraw = SCROLLED;
             break;
         case K_TAB:
         case K_LINK_NEXT:
-            redraw = step_link(1);
+            redraw = step_link(1) ? SCROLLED : 0;
             break;
         case K_BACKTAB:
         case K_LINK_PREV:
-            redraw = step_link(-1);
+            redraw = step_link(-1) ? SCROLLED : 0;
             break;
         case K_FIND_HERE:
             find_prompt();
@@ -729,24 +884,22 @@ int view_loop(void)
             }
             break;
         case K_HEAD_NEXT:
-            redraw = step_heading(1);
+            redraw = step_heading(1) ? SCROLLED : 0;
             break;
         case K_HEAD_PREV:
-            redraw = step_heading(-1);
+            redraw = step_heading(-1) ? SCROLLED : 0;
             break;
-        case K_ENTER:
-            if (sel < 0 && !step_link(1)) {
-                redraw = 0;
-                break;
-            }
-            if (sel >= 0 && sel < top + scr_rows) {
-                unsigned target = sel_target;
+        case K_ENTER: {
+            uint16_t target;
+            int a;
+            int b;
 
-                if (target < book.ntopics && view_open(target) == 0) {
-                    break;
-                }
+            redraw = 0;
+            if (nlines && link_at(cl, cc, &target, &a, &b) && target < book.ntopics) {
+                redraw = view_open(target) == 0;
             }
             break;
+        }
         case K_BACK:
         case K_HISTBACK:
             redraw = history(back, &nback, fwd, &nfwd);
@@ -796,11 +949,11 @@ int view_loop(void)
                 break;
             }
             case ' ':
-                scroll_to(top + (scr_rows - 1));
+                cursor_lines(scr_rows - 1, 1);
                 redraw = SCROLLED;
                 break;
             case 'b':
-                scroll_to(top - (scr_rows - 1));
+                cursor_lines(-(scr_rows - 1), 1);
                 redraw = SCROLLED;
                 break;
             default:
@@ -810,8 +963,8 @@ int view_loop(void)
         default:
             redraw = 0;
         }
-        if (redraw == SCROLLED) {
-            moved(was);
+        if (redraw == SCROLLED && hscroll == was_h && nlines > 0) {
+            moved(was, was_cl);
         } else if (redraw) {
             draw();
         }

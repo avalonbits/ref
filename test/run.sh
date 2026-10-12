@@ -57,7 +57,7 @@ scripted() {
 
 # dump <transcript> <name>: the screen ref drew at dump:<name>.
 dump() {
-    awk -v want="== $2" '$0 == want { p = 1; next } /^== |^key |^exit / { p = 0 } p' <<< "$1"
+    awk -v want="== $2" '$0 == want { p = 1; next } /^== |^key |^exit |^lit / { p = 0 } p' <<< "$1"
 }
 
 # --- the release build: printing, and exit codes ---
@@ -107,13 +107,15 @@ dump:forward")
 check "ref -k vdu 23 27 3 opens Draw current bitmap" \
       "$(dump "$t" open | head -1)" \
       "VDU 23, 27, 3, x; y;: Draw current bitmap on screen at pixel position x, y"
-check "  Tab selects its first link" "$(grep -c '^view topic 502 top 0 lines 22 sel 4:20 ' <<< "$t")" 1
+check "  Tab puts the cursor on its first link" "$(grep -c '^view topic 502 top 0 lines 22 cur 4:20$' <<< "$t")" 2
 check "  Enter follows it" "$(dump "$t" link | head -1)" "Bitmap plots (PLOT codes &E8-&EF)"
 check "  the status line says where it is" \
       "$(dump "$t" link | tail -1 | sed 's/  *[0-9]*%$//')" \
       " VDU 25: PLOT commands > Bitmap plots (PLOT codes &E8-&EF)"
 check "  Backspace goes back" "$(dump "$t" back | head -1)" \
       "VDU 23, 27, 3, x; y;: Draw current bitmap on screen at pixel position x, y"
+check "  and puts the cursor back on the link it followed" \
+      "$(grep -A1 '^key back$' <<< "$t" | grep -c '^view topic 502 top 0 lines 22 cur 4:20$')" 1
 check "  Alt+Right goes forward again" "$(dump "$t" forward | head -1)" \
       "Bitmap plots (PLOT codes &E8-&EF)"
 
@@ -126,10 +128,10 @@ ctrl+down
 dump:third
 ctrl+up
 dump:back")
-check "Ctrl+Down selects each heading in turn, at the top of the screen" \
-      "$(grep -c '^view topic 602 top 34 lines 169 sel -1:0 head 34$' <<< "$t")" 2
-check "  the third is Copper API Commands" "$(dump "$t" third | head -1)" "Copper API Commands"
-check "  Ctrl+Up goes back to the one before" "$(dump "$t" back | head -1)" "How it works"
+check "Ctrl+Down puts the cursor on each heading in turn, at the top of the screen" \
+      "$(grep -oE 'cur [0-9]+:0' <<< "$t" | sed -n '2,4p' | tr '\n' ' ')" "cur 34:0 cur 55:0 cur 57:0 "
+check "  the third is Command 0" "$(dump "$t" third | head -1)" "Command 0: Create a palette"
+check "  Ctrl+Up goes back to the one before" "$(grep -c 'top 55 lines 169 cur 55:0 scrolled -2$' <<< "$t")" 1
 t=$(scripted "ref -k VDU 23,0,&A0,1;6" "ctrl+right
 ctrl+right
 ctrl+left
@@ -153,7 +155,7 @@ text:zzzz
 enter
 dump:notfound")
 check "Ctrl+Right and Ctrl+Left step through the links" \
-      "$(grep -o 'sel [0-9]*:[0-9]*' <<< "$t" | sed -n '1,3p' | tr '\n' ' ')" "sel 30:25 sel 44:37 sel 30:25 "
+      "$(grep -oE 'cur [0-9]+:[0-9]+' <<< "$t" | sed -n '2,4p' | tr '\n' ' ')" "cur 30:25 cur 44:37 cur 30:25 "
 check "Ctrl+F finds words, spaces and all, and shows them" \
       "$(grep -m1 "^find " <<< "$t")" "find 'buffer 12' at 87:30"
 check "  the match is on the screen" "$(dump "$t" found | grep -c 'buffer 12')" 2
@@ -164,6 +166,21 @@ text:COMBINING THE ABOVE
 enter")
 check "  ignoring case: COMBINING THE ABOVE finds Combining the above" "$(grep -c "^find 'COMBINING THE ABOVE' at " <<< "$t2")" 1
 check "  and a word that is not there says so" "$(dump "$t" notfound | grep -c '^ Not found: zzzz$')" 1
+
+# The cursor lights one line: a heading that wraps lights the line the
+# cursor is on, and moving off it leaves nothing lit behind.
+t=$(scripted "ref -k vdu 23 27 6" "dump:heading
+down
+dump:second
+down
+down
+dump:off")
+check "a heading that wraps is two lines" "$(dump "$t" heading | sed -n 2p | grep -c '^buffer ID')" 1
+check "  the cursor on it lights only its line" "$(grep '^lit heading:' <<< "$t")" "lit heading: 0"
+check "  Down lights the second line instead" "$(grep '^lit second:' <<< "$t")" "lit second: 1"
+check "  and off the heading, nothing stays lit" "$(grep '^lit off:' <<< "$t")" "lit off:"
+t=$(scripted "ref -k vdu 23 27 3" "dump:one")
+check "the blank line after a lit heading is not lit" "$(grep '^lit one:' <<< "$t")" "lit one: 0"
 
 # --- scrolling a long topic ---
 t=$(scripted "ref -k VDU 23,0,&A0,1;6" "dump:top
@@ -245,7 +262,7 @@ check "t from a topic deep in a closed page opens its way to it" \
 # --- help ---
 t=$(scripted "ref -k cd" "c:?
 esc")
-check "? shows the keys" "$(dump "$t" help | sed -n 3p)" "Reading a topic"
+check "? shows the keys" "$(dump "$t" help | sed -n 3p)" "Reading a topic: the cursor"
 
 # --- under hub, as ade's F1 runs it ---
 if [ -f "$HUB/build/hub.bin" ] && [ -f "$HUB/build/lib/agondev/libhub.a" ]; then
@@ -270,7 +287,7 @@ fi
 # --- on the real VDP: what ref drew, read back ---
 # vdp_screen <transcript> <name>: what the VDP showed at vdp:<name>.
 vdp_screen() {
-    awk -v want="== vdp $2" '$0 == want { p = 1; next } /^== |^key |^exit / { p = 0 } p' <<< "$1"
+    awk -v want="== vdp $2" '$0 == want { p = 1; next } /^== |^key |^exit |^lit / { p = 0 } p' <<< "$1"
 }
 # same <transcript> <name> <margin> <width>: does the VDP show, inside the
 # margins, what ref meant to draw? The status line, the last row, is left
@@ -311,17 +328,20 @@ if [ -x "$EMU/fab-agon-emulator" ]; then
     # contents and a list.
     sd=$(emu_card "$SCRIPTED")
     printf 'VDU 22 3\r\nref -k VDU 23,0,&A0,1;6\r\n' > "$sd/autoexec.txt"
+    { for i in $(seq 28); do echo down; done; } > "$sd/ref.keys"
     printf '%s\n' down down down dump:down vdp:down up dump:up vdp:up \
         c:t pgdn down down dump:toc vdp:toc esc \
         c:/ text:mos dump:find down vdp:find0 dump:find0 \
-        pgdn down down dump:list vdp:list esc esc > "$sd/ref.keys"
+        pgdn down down dump:list vdp:list esc esc >> "$sd/ref.keys"
     emu_run "$sd" 300 full > /dev/null
     t=$(tr -d '\r' < "$sd/ref.out" 2>/dev/null)
     rm -rf "$sd"
-    check "Down scrolls the rows rather than redrawing them" \
+    check "Down at the bottom of the screen scrolls the rows rather than redrawing them" \
           "$(grep -c 'scrolled 1$' <<< "$t")" 3
     check "  and the VDP shows the topic three lines on" "$(same "$t" down 2 76)" yes
-    check "  and back up one" "$(same "$t" up 2 76)" yes
+    check "  and Up, the cursor still on the screen, moves it and scrolls nothing" \
+          "$(grep -A1 '^key up$' <<< "$t" | grep -c 'scrolled')" 0
+    check "  as drawn" "$(same "$t" up 2 76)" yes
     check "the contents, moved past the page's end, as drawn" "$(same "$t" toc 2 76)" yes
     check "find's list, its cursor moved, as drawn" "$(same "$t" find0 2 76)" yes
     check "  and scrolled past its end, as drawn" "$(same "$t" list 2 76)" yes

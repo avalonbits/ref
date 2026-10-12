@@ -325,10 +325,16 @@ core at least).
   topic rather than sitting beside it -- at 80 columns a tree beside the
   text leaves neither enough room. `t` goes to the contents at the topic's
   own node, Esc comes back.
-- **Keys**: as planned, and a hypertext browser's: Ctrl+Up/Down select the
-  previous or next heading (highlighted, brought to the top of the screen),
-  Ctrl+Left/Right (or Shift+Tab/Tab) the previous or next link, Enter
-  follows it. Ctrl+F finds words as aed does -- a prompt on the bottom row
+- **Keys**: as planned, and a hypertext browser's, with a cursor: the
+  arrows move it by line and character and the screen follows; Ctrl+Up/Down
+  put it on the previous or next heading (brought to the top of the
+  screen), Ctrl+Left/Right (or Shift+Tab/Tab) on the previous or next link.
+  The link or heading line under the cursor is lit, that line alone;
+  elsewhere the VDP's text cursor shows. Enter follows the link under the
+  cursor, and the history keeps the cursor, so Backspace returns to the
+  link that was followed. (Each row starts in the text colour: a row that
+  ended lit once lit the next row's padding, a second cyan bar that
+  scrolling then left behind.) Ctrl+F finds words as aed does -- a prompt on the bottom row
   holding the last search, Enter to find, ignoring case, within a line,
   Ctrl+N / Ctrl+P for the next and previous match, wrapping, "Not found"
   until a key -- but from the top of the screen on, and with spaces

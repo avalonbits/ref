@@ -38,16 +38,19 @@ A lookup that finds one topic opens it; several, a list to choose from.
 
 Reading a topic:
 
+A cursor moves through the text, as in a text-mode browser; the link or
+heading under it is lit, and anywhere else the text cursor shows where it is.
+
 | Key | Does |
 |---|---|
-| Up, Down, PgUp, PgDn, Home, End | scroll (Space and `b` page too) |
-| Left, Right | scroll code and tables sideways |
-| Ctrl+Up, Ctrl+Down | the previous or next heading |
-| Ctrl+Left, Ctrl+Right (or Shift+Tab, Tab) | the previous or next link |
-| Enter | follow the link |
+| arrows | move the cursor; the screen follows it |
+| PgUp, PgDn, Home, End | by the page, or to either end (Space and `b` page too) |
+| Ctrl+Up, Ctrl+Down | the cursor to the previous or next heading |
+| Ctrl+Left, Ctrl+Right (or Shift+Tab, Tab) | the cursor to the previous or next link |
+| Enter | follow the link under the cursor |
 | Ctrl+F | find words, from the top of the screen on, as aed finds |
 | Ctrl+N, Ctrl+P | the next or previous match |
-| Backspace, Alt+Left / Alt+Right | back / forward |
+| Backspace, Alt+Left / Alt+Right | back, with the cursor on the link you followed / forward |
 | `n`, `p` | the next or previous topic |
 | `u` | the section the topic is in |
 | `t` | the contents |

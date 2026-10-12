@@ -51,6 +51,7 @@ static const uint8_t PAL2[C_COUNT][2] = {
 #define SHADOW_COLS 132
 #define SHADOW_ROWS 64
 static char shadow[SHADOW_ROWS][SHADOW_COLS];
+static uint8_t shadow_lit[SHADOW_ROWS];     /* rows with something in C_SEL */
 static int shadow_row;
 static FILE* transcript;
 
@@ -95,6 +96,20 @@ void scr_dump(const char* why)
             n--;
         }
         script_log("%.*s", n, shadow[r]);
+    }
+    {
+        /* Which text rows are lit -- what the cursor is on -- after the dump,
+         * so a comparison of the dump with the VDP's screen is not upset. */
+        static char lit[SHADOW_ROWS * 3 + 1];
+        int len = 0;
+
+        for (r = 0; r < scr_rows && r < SHADOW_ROWS; r++) {
+            if (shadow_lit[r]) {
+                len += sprintf(lit + len, " %d", r);
+            }
+        }
+        lit[len] = 0;
+        script_log("lit %s:%s", why, lit);
     }
 }
 
@@ -210,6 +225,7 @@ void scr_cls(void)
     flush();
 #ifdef REF_SCRIPT
     memset(shadow, ' ', sizeof shadow);
+    memset(shadow_lit, 0, sizeof shadow_lit);
 #endif
 }
 
@@ -230,12 +246,20 @@ void scr_colour(int role)
 
 void scr_begin(int row)
 {
+    /* No colour carried from the row before: a row that ended lit would
+     * light the next row's padding. */
+    if (cur_role == C_SEL || cur_role == C_STATUS) {
+        scr_colour(C_TEXT);
+    }
     put(31);
     put(scr_margin);
     put(row);
     row_x = 0;
 #ifdef REF_SCRIPT
     shadow_row = row;
+    if (row < SHADOW_ROWS) {
+        shadow_lit[row] = 0;
+    }
 #endif
 }
 
@@ -248,6 +272,9 @@ void scr_add(int ch)
 #ifdef REF_SCRIPT
     if (shadow_row < SHADOW_ROWS && row_x < SHADOW_COLS) {
         shadow[shadow_row][row_x] = (char)ch;
+        if (cur_role == C_SEL) {
+            shadow_lit[shadow_row] = 1;
+        }
     }
 #endif
     row_x++;
@@ -307,11 +334,15 @@ void scr_scroll(int first, int n)
             m = h;
         }
         if (n > 0) {
+            memmove(shadow_lit + first, shadow_lit + first + m, (size_t)(h - m));
+            memset(shadow_lit + scr_rows - m, 0, (size_t)m);
             memmove(shadow[first], shadow[first + m], (size_t)(h - m) * SHADOW_COLS);
             for (r = scr_rows - m; r < scr_rows; r++) {
                 memset(shadow[r], ' ', SHADOW_COLS);
             }
         } else {
+            memmove(shadow_lit + first + m, shadow_lit + first, (size_t)(h - m));
+            memset(shadow_lit + first, 0, (size_t)m);
             memmove(shadow[first + m], shadow[first], (size_t)(h - m) * SHADOW_COLS);
             for (r = first; r < first + m; r++) {
                 memset(shadow[r], ' ', SHADOW_COLS);
