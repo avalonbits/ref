@@ -29,6 +29,11 @@ int agon_char(const char** s)
     unsigned c = p[0];
     int n = 1;
 
+    if (c >= 0x20 && c < 0x7F) {
+        *s += 1;                    /* most of every page: as it is */
+
+        return (int)c;
+    }
     if (c >= 0xF0) {
         c = '?';
         n = 4;

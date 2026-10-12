@@ -393,6 +393,14 @@ class Md2ref(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stdout)
         self.assertLess(len(data), len(page) * 3 // 4)
 
+    def test_characters_into_the_agon_font(self):
+        # Printable ASCII as it is, to ~; DEL and a stray byte are '?';
+        # quotes, dashes and arrows in UTF-8 become the font's own.
+        page = '# T\n\nA ~z\x7f \u2018q\u2019 \u2014 \u2192 \xe9\n'
+        p, data, left = compile_pages({'index.md': page})
+        self.assertEqual(p.returncode, 0, p.stdout)
+        self.assertIn(b"A ~z? 'q' - \x90 \xe9", b''.join(views(data)))
+
     def test_words_past_one_run(self):
         # More words than one 16 KB run of the words file holds: sorted in
         # runs, merged, every word still finds its topic.
