@@ -401,6 +401,13 @@ class Md2ref(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stdout)
         self.assertIn(b"A ~z? 'q' - \x90 \xe9", b''.join(views(data)))
 
+    def test_tabs_are_stops_of_four(self):
+        # A tab indents a code block, and a second one indents its line
+        # within it, to the next stop of four.
+        p, data, left = compile_pages({'index.md': '# T\n\npara\n\n\tif x:\n\t\ty = 1\n'})
+        self.assertEqual(p.returncode, 0, p.stdout)
+        self.assertIn(b'if x:\n    y = 1\n', b''.join(views(data)))
+
     def test_words_past_one_run(self):
         # More words than one 16 KB run of the words file holds: sorted in
         # runs, merged, every word still finds its topic.

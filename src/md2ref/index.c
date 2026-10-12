@@ -815,7 +815,7 @@ int write_words(void (*emit)(const void* p, unsigned n))
     static uint8_t out[16];
     static unsigned eq[MAX_RUNS];
     window* win;
-    int* live;
+    window** live;              /* pointers, as indexing windows is a multiply */
     unsigned nlive;
     uint16_t* v = NULL;
     unsigned vcap = 0;
@@ -850,16 +850,18 @@ int write_words(void (*emit)(const void* p, unsigned n))
      * that has it, its topics gathered; then written. live holds the runs
      * not yet done, and first each one's current word's first two
      * letters, which settle most comparisons. */
-    live = md_realloc(NULL, (unsigned)(nruns + 1) * (unsigned)sizeof(int));
+    live = md_realloc(NULL, (unsigned)(nruns + 1) * (unsigned)sizeof(window*));
     nlive = 0;
     for (r = 0; r < nruns; r++) {
-        if (ready(&win[r])) {
-            live[nlive++] = r;
-            win[r].first = first_of(&win[r]);
+        window* w = win + r;
+
+        if (ready(w)) {
+            live[nlive++] = w;
+            w->first = first_of(w);
         }
     }
     for (;;) {
-        int least;
+        window* least;
         unsigned n = 0;
         unsigned klen;
         unsigned shared = 0;
@@ -875,8 +877,8 @@ int write_words(void (*emit)(const void* p, unsigned n))
         least = live[0];
         eq[neq++] = 0;
         for (k = 1; k < nlive; k++) {
-            window* w = &win[live[k]];
-            window* l = &win[least];
+            window* w = live[k];
+            window* l = least;
             int c = w->first < l->first ? -1 : w->first > l->first ? 1
                     : key_cmp(w->buf + w->at, l->buf + l->at);
 
@@ -888,10 +890,10 @@ int write_words(void (*emit)(const void* p, unsigned n))
                 eq[neq++] = k;
             }
         }
-        klen = win[least].buf[win[least].at];
-        memcpy(key, win[least].buf + win[least].at, klen + 1);
+        klen = least->buf[least->at];
+        memcpy(key, least->buf + least->at, klen + 1);
         for (j = 0; j < neq; j++) {
-            window* w = &win[live[eq[j]]];
+            window* w = live[eq[j]];
 
             do {
                 const uint8_t* p = w->buf + w->at + 1 + klen;
@@ -908,7 +910,7 @@ int write_words(void (*emit)(const void* p, unsigned n))
         /* The runs that are done, out of live: from the back, so the
          * indexes in eq still hold. */
         for (j = neq; j-- > 0;) {
-            if (!ready(&win[live[eq[j]]])) {
+            if (!ready(live[eq[j]])) {
                 live[eq[j]] = live[--nlive];
             }
         }

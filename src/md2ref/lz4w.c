@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "md2ref.h"
+#include "refcore.h"
 
 #define HASH_BITS 12
 #define MIN_MATCH 4
@@ -147,7 +148,12 @@ unsigned lz4_compress(const uint8_t* src, unsigned n, uint8_t* dst, unsigned roo
             while (i + mlen < n && a[mlen] == b[mlen]) {
                 mlen++;
             }
-            if (nfixed) {
+            /* A placeholder is the two bytes after a LINK, and both sides
+             * of a match are the same bytes: only a match with a LINK in
+             * it, or that starts on what could be a placeholder's second
+             * byte, can take one in. Most have neither, and need no
+             * search. */
+            if (nfixed && mlen >= MIN_MATCH && (b[0] == 0xFF || memchr(b, REF_LINK, mlen))) {
                 mlen = clear_of(fixed, nfixed, i, mlen);
                 mlen = clear_of(fixed, nfixed, cand - 1, mlen);
             }

@@ -164,6 +164,9 @@ static int tabs_in(const char* s, int len)
     int n = 0;
     int k;
 
+    if (len <= 0 || !memchr(s, '\t', (size_t)len)) {
+        return 0;                   /* most lines: memchr is the eZ80's cpir */
+    }
     for (k = 0; k < len; k++) {
         n += s[k] == '\t';
     }
