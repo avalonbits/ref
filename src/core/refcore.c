@@ -141,6 +141,8 @@ int ref_open(ref_file* r, const char* path)
     r->commit[12] = 0;
     memcpy(r->date, h + 24, 10);
     r->date[10] = 0;
+    r->flags = ref_rd16(h + 10);
+    r->book_title = ref_rd32(h + 104);
     r->ntopics = ref_rd16(h + 36);
     r->nnodes = ref_rd16(h + 38);
     r->nkb = ref_rd16(h + 40);
@@ -289,6 +291,15 @@ int ref_topic_title(ref_file* r, unsigned topic, char* buf, int size)
     ref_get_topic(r, topic, &t);
 
     return ref_title(r, t.title, buf, size);
+}
+
+int ref_book_title(ref_file* r, char* buf, int size)
+{
+    if (!(r->flags & REF_HAS_TITLE)) {
+        return -1;
+    }
+
+    return ref_title(r, r->book_title, buf, size);
 }
 
 int ref_view(ref_file* r, unsigned num)

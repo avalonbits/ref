@@ -6,7 +6,7 @@ unless said otherwise.
 header, 128 bytes
      0  8  magic "AGONREF\\x1a"
      8  2  format version (1)
-    10  2  flags (0)
+    10  2  flags: bit 0, the book has a title (at 104)
     12 12  agon-docs commit, its first 12 hex digits
     24 12  agon-docs commit date, YYYY-MM-DD, NUL-padded
     36  2  topics            38  2  contents nodes
@@ -22,7 +22,9 @@ header, 128 bytes
     96  2  the largest compressed topic
     98  2  (0)
    100  4  file size
-   104 24  (0)
+   104  4  the book's title (into titles): the wiki's own, mkdocs.yml's
+           site_name, when flag bit 0 says there is one
+   108 20  (0)
 
 nodes, 10 bytes each: the contents tree, node 0 the first at the top
      title (u32, into titles), topic (u16, NONE for a nav section),
@@ -168,6 +170,7 @@ def build(book, keys_index, rules, src):
         return title_off[b]
 
     topic_titles = [title(t.title) for t in book.topics]
+    book_title = title(book.title) if book.title else 0
 
     # Contents: nodes in preorder, so a node's first child is the next node.
     nodes = []
@@ -241,12 +244,14 @@ def build(book, keys_index, rules, src):
     commit = src.commit[:12].encode()
     date = src.date.encode()
     head = struct.pack('<8sHH12s12sHHHHII' + 'I' * 10 + 'HHHHI',
-                       MAGIC, VERSION, 0, commit, date, n, len(nodes), nkb, nwb,
+                       MAGIC, VERSION, 1 if book.title else 0, commit, date, n, len(nodes),
+                       nkb, nwb,
                        len(entries), len(wentries),
                        offs['nodes'], offs['topics'], offs['titles'], offs['text'],
                        offs['keys'], offs['keydir'], offs['words'], offs['worddir'],
                        offs['norm'], offs['dict'],
                        len(dictionary), view, max(len(p) for p in packed), 0, size)
+    head += struct.pack('<I', book_title)
     head += bytes(HEADER - len(head))
     data = bytes(head) + bytes(body)
 
@@ -282,13 +287,15 @@ class RefDat:
         if data[:8] != MAGIC:
             raise ValueError('not a ref.dat')
         f = struct.unpack_from('<8sHH12s12sHHHHII' + 'I' * 10 + 'HHHHI', data, 0)
-        (_, self.version, _, commit, date, self.ntopics, self.nnodes, self.nkb, self.nwb,
+        (_, self.version, self.flags, commit, date, self.ntopics, self.nnodes, self.nkb, self.nwb,
          self.nkeys, self.nwords, self.o_nodes, self.o_topics, self.o_titles, self.o_text,
          self.o_keys, self.o_keydir, self.o_words, self.o_worddir, self.o_norm, self.o_dict,
          self.dict_len, self.view, self.max_packed, _, self.size) = f
         self.commit = commit.rstrip(b'\0').decode()
         self.date = date.rstrip(b'\0').decode()
         self.dictionary = data[self.o_dict:self.o_dict + self.dict_len]
+        self.title = (self.title_at(struct.unpack_from('<I', data, 104)[0])
+                      if self.flags & 1 else None)
 
     def title_at(self, off):
         k = self.o_titles + off

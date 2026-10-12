@@ -86,6 +86,13 @@ def titles(b):
     return [t.title for t in b.topics]
 
 
+class SiteName(unittest.TestCase):
+    def test_read(self):
+        self.assertEqual(source.read_site_name('site_name: "Community docs"\nnav:\n'),
+                         'Community docs')
+        self.assertIsNone(source.read_site_name('nav:\n'))
+
+
 class Nav(unittest.TestCase):
     def test_tree(self):
         nav = source.read_nav(NAV)

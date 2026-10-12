@@ -504,6 +504,14 @@ static int ref_main(int argc, char** argv)
         return args[0] ? 0 : NOTHING;
     }
 
+    {
+        static char book_title[REF_TITLE_MAX + 1];
+
+        if (ref_book_title(&book, book_title, sizeof book_title) < 0) {
+            strcpy(book_title, "Agon documentation");
+        }
+        scr_set_header(book_title);
+    }
     scr_open();
     in_open();
     if (!args[0]) {

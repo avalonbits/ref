@@ -22,7 +22,7 @@ import unicodedata
 from dataclasses import dataclass, field
 
 from . import markdown as md
-from .source import read_nav
+from .source import read_nav, read_site_name
 
 
 @dataclass
@@ -72,6 +72,7 @@ class Book:
     pages: dict             # page path -> its top topic number
     anchors: dict           # page path -> {anchor: topic number}
     images: list            # (page, line, src) skipped with a note
+    title: str = ''         # the wiki's own title: mkdocs.yml's site_name
     external: int = 0       # links left as text with their URL
     internal: int = 0       # links resolved to topics
 
@@ -97,7 +98,8 @@ def build(docs_dir, link_fixes=None):
     no longer needed shows up.
     """
     with open(os.path.join(docs_dir, 'mkdocs.yml'), encoding='utf-8') as f:
-        nav = read_nav(f.read())
+        yml = f.read()
+    nav = read_nav(yml)
     root = os.path.join(docs_dir, 'docs')
 
     topics = []
@@ -144,7 +146,7 @@ def build(docs_dir, link_fixes=None):
             top = add_page(_title_from_path(path), path)
             section.children.append(Node(topics[top].title, top, _subtree(topics, top)))
         contents.append(section)
-    book = Book(topics, contents, pages, anchors, images)
+    book = Book(topics, contents, pages, anchors, images, read_site_name(yml) or '')
     errors = _resolve(book, sources, link_fixes or {})
     if errors:
         raise BookError(errors)

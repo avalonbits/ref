@@ -74,6 +74,16 @@ class NavNode:
     children: list
 
 
+def read_site_name(text):
+    """mkdocs.yml's site_name: the wiki's own title."""
+    for line in text.split('\n'):
+        m = re.match(r'''^site_name\s*:\s*(.*?)\s*$''', line)
+        if m:
+            return _unquote(m.group(1))
+
+    return None
+
+
 def read_nav(text):
     lines = text.split('\n')
     start = None

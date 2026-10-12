@@ -77,6 +77,7 @@ class File(unittest.TestCase):
         self.assertEqual(r.ntopics, len(b.topics))
         self.assertEqual(r.size, len(out.data))
         self.assertEqual(r.view, out.view_size)
+        self.assertEqual(r.title, b'Community Agon Platform documentation')
 
     def test_every_topic_decompresses_to_its_markup(self):
         b, out = built()

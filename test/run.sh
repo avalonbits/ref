@@ -191,11 +191,11 @@ dump:next
 up
 ctrl+left
 dump:prev")
-check "a link that wraps is lit on both its lines" "$(grep '^lit wrapped:' <<< "$t")" "lit wrapped: 12 13"
-check "  from its second line too" "$(grep '^lit tail:' <<< "$t")" "lit tail: 12 13"
-check "  and the next is lit whole when the cursor gets to it" "$(grep '^lit next:' <<< "$t")" "lit next: 14 15"
+check "a link that wraps is lit on both its lines" "$(grep '^lit wrapped:' <<< "$t")" "lit wrapped: 11 12"
+check "  from its second line too" "$(grep '^lit tail:' <<< "$t")" "lit tail: 11 12"
+check "  and the next is lit whole when the cursor gets to it" "$(grep '^lit next:' <<< "$t")" "lit next: 13 14"
 check "  Ctrl+Left from a second line goes to the link before, not its own start" \
-      "$(grep '^lit prev:' <<< "$t")" "lit prev: 11"
+      "$(grep '^lit prev:' <<< "$t")" "lit prev: 10"
 t=$(scripted "ref -k vdu 23 27 3" "dump:one")
 check "the blank line after a lit heading is not lit" "$(grep '^lit one:' <<< "$t")" "lit one: 0"
 
@@ -209,7 +209,7 @@ home
 dump:home")
 check "a buffered command by its sequence: Command 6" \
       "$(dump "$t" top | head -1)" "Command 6: Conditionally call a buffer"
-check "  PgDn scrolls a page: the rows less the status line, less one" "$(grep -c '^view topic 543 top 23 ' <<< "$t")" 1
+check "  PgDn scrolls a page: the text rows, less one" "$(grep -c '^view topic 543 top 22 ' <<< "$t")" 1
 check "  End shows the end, at 100%" "$(dump "$t" end | tail -1 | grep -oE '[0-9]+%$')" "100%"
 check "  Home the top again" "$(dump "$t" home | head -1)" "Command 6: Conditionally call a buffer"
 
@@ -336,17 +336,18 @@ vdp_screen() {
     awk -v want="== vdp $2" '$0 == want { p = 1; next } /^== |^key |^exit |^lit / { p = 0 } p' <<< "$1"
 }
 # same <transcript> <name> <margin> <width>: does the VDP show, inside the
-# margins, what ref meant to draw? The status line, the last row, is left
-# out: the VDP cannot read back its last row (nor its last column).
+# margins, what ref meant to draw? The header, the top row, is not in the
+# dump (the transcript names it); the status line, the last row, is left out:
+# the VDP cannot read back its last row (nor its last column).
 same() {
     local drawn read
     drawn=$(dump "$1" "$2" | sed '$d' | sed 's/ *$//')
-    read=$(vdp_screen "$1" "$2" | sed '$d' | cut -c$(($3 + 1))-$(($3 + $4)) | sed 's/ *$//')
+    read=$(vdp_screen "$1" "$2" | sed '1d;$d' | cut -c$(($3 + 1))-$(($3 + $4)) | sed 's/ *$//')
     [ "$(md5sum <<< "$drawn")" = "$(md5sum <<< "$read")" ] && echo yes || echo no
 }
 # margins_blank <transcript> <name> <margin> <width>: nothing in the margins.
 margins_blank() {
-    vdp_screen "$1" "$2" | sed '$d' | awk -v m="$3" -v w="$4" '
+    vdp_screen "$1" "$2" | sed '1d;$d' | awk -v m="$3" -v w="$4" '
         { left = substr($0, 1, m); right = substr($0, m + w + 1)
           sub(/\.$/, "", right)            # the last column: unreadable
           if (left ~ /[^ ]/ || right ~ /[^ ]/) bad = 1 }
@@ -378,20 +379,26 @@ if [ -x "$EMU/fab-agon-emulator" ]; then
     # its colour; a text row's edges, in the margins, are not.
     sd=$(emu_card "$SCRIPTED")
     printf 'VDU 22 3\r\nref -k vdu 23 27 3\r\n' > "$sd/autoexec.txt"
-    printf '%s\n' pixel:0,29 pixel:79,29 pixel:0,5 pixel:79,5 esc > "$sd/ref.keys"
+    printf '%s\n' pixel:0,29 pixel:79,29 pixel:0,5 pixel:79,5 pixel:0,0 pixel:79,0 vdp:top esc \
+        > "$sd/ref.keys"
     emu_run "$sd" 300 full > /dev/null
     t=$(tr -d '\r' < "$sd/ref.out" 2>/dev/null)
     rm -rf "$sd"
     check "mode 3: the status line runs from the first column to the last" \
-          "$(grep '^pixel' <<< "$t" | tr '\n' ' ')" \
+          "$(grep '^pixel' <<< "$t" | head -4 | tr '\n' ' ')" \
           "pixel 0,29 aaaaaa pixel 79,29 aaaaaa pixel 0,5 000000 pixel 79,5 000000 "
+    check "  and so does the header" "$(grep '^pixel' <<< "$t" | tail -2 | tr '\n' ' ')" \
+          "pixel 0,0 aaaaaa pixel 79,0 aaaaaa "
+    check "  which is the wiki's title, centred" \
+          "$(vdp_screen "$t" top | head -1 | sed 's/\.$//; s/ *$//')" \
+          "                     Community Agon Platform documentation"
 
     # Scrolling a line or two moves the rows on the VDP rather than redrawing
     # them: the screen must still be what ref meant, in a topic, the
     # contents and a list.
     sd=$(emu_card "$SCRIPTED")
     printf 'VDU 22 3\r\nref -k VDU 23,0,&A0,1;6\r\n' > "$sd/autoexec.txt"
-    { for i in $(seq 28); do echo down; done; } > "$sd/ref.keys"
+    { for i in $(seq 27); do echo down; done; } > "$sd/ref.keys"
     printf '%s\n' down down down dump:down vdp:down up dump:up vdp:up \
         c:t pgdn down down dump:toc vdp:toc esc \
         c:/ text:mos dump:find down vdp:find0 dump:find0 \

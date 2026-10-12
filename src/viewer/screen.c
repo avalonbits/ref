@@ -19,6 +19,18 @@ int scr_rows;
 int scr_margin;
 int scr_status_cols;
 static int phys_cols;
+static int phys_rows;
+static int row_phys;                /* the screen row being drawn */
+static const char* header = "";     /* the book's title, on the top row */
+
+/* The screen row of a row: the top row is the header, then the text rows,
+ * and the status line is the last. */
+static void draw_header(void);
+
+static int phys(int row)
+{
+    return row == scr_rows ? phys_rows - 1 : row + 1;
+}
 
 #define ROW_BYTES 600
 
@@ -114,6 +126,7 @@ void scr_dump(const char* why)
         }
         lit[len] = 0;
         script_log("lit %s:%s", why, lit);
+        script_log("header %s", header);
     }
 }
 
@@ -129,7 +142,7 @@ static void flush(void);
 void scr_vdp_pixel(int x, int y)
 {
     int ox = (x * 2 + 1) * 1280 / (phys_cols * 2);
-    int oy = 1023 - (y * 2 + 1) * 1024 / ((scr_rows + 1) * 2);
+    int oy = 1023 - (y * 2 + 1) * 1024 / (phys_rows * 2);
     unsigned long c;
 
     flush();
@@ -153,7 +166,7 @@ void scr_vdp_dump(const char* why)
     int x;
 
     script_log("== vdp %s", why);
-    for (r = 0; r <= scr_rows && r < SHADOW_ROWS; r++) {
+    for (r = 0; r < phys_rows && r < SHADOW_ROWS; r++) {
         int n = 0;
 
         for (x = 0; x < phys_cols && x < SHADOW_COLS; x++) {
@@ -228,7 +241,8 @@ void scr_open(void)
     scr_margin = cols >= 60 ? 2 : 1;
     scr_cols = cols - 2 * scr_margin;
     scr_status_cols = cols - 1;
-    scr_rows = rows - 1;
+    phys_rows = rows;
+    scr_rows = rows - 2;                    /* less the header and the status line */
     cur_role = -1;
     put(23);                                /* the cursor off */
     put(1);
@@ -255,6 +269,48 @@ void scr_cls(void)
     memset(shadow, ' ', sizeof shadow);
     memset(shadow_lit, 0, sizeof shadow_lit);
 #endif
+    draw_header();
+}
+
+void scr_set_header(const char* text)
+{
+    header = text ? text : "";
+}
+
+/* The top row: the book's title, centred, edge to edge in the status
+ * line's colours. Not part of the shadow: the transcript names it. */
+static void draw_header(void)
+{
+    int n = (int)strlen(header);
+    int x;
+    int w = phys_cols - 1;
+
+    if (n > w) {
+        n = w;
+    }
+    scr_colour(C_STATUS);
+    put(31);
+    put(0);
+    put(0);
+    for (x = 0; x < (w - n) / 2; x++) {
+        put(' ');
+    }
+    for (; x < (w - n) / 2 + n; x++) {
+        put((unsigned char)header[x - (w - n) / 2]);
+    }
+    for (; x < w; x++) {
+        put(' ');
+    }
+    /* Its last cell painted, as the status line's is. */
+    put(28);
+    put(phys_cols - 1);
+    put(0);
+    put(phys_cols - 1);
+    put(0);
+    put(12);
+    put(26);
+    scr_colour(C_TEXT);
+    flush();
 }
 
 void scr_colour(int role)
@@ -282,9 +338,10 @@ void scr_begin(int row)
     /* The status row runs edge to edge; the text rows sit inside margins. */
     row_full = row == scr_rows;
     row_limit = row_full ? phys_cols - 1 : scr_cols;
+    row_phys = phys(row);
     put(31);
     put(row_full ? 0 : scr_margin);
-    put(row);
+    put(row_phys);
     row_x = 0;
 #ifdef REF_SCRIPT
     shadow_row = row;
@@ -332,9 +389,9 @@ void scr_end(void)
          * in the row's colours. */
         put(28);
         put(phys_cols - 1);
-        put(scr_rows);
+        put(row_phys);
         put(phys_cols - 1);
-        put(scr_rows);
+        put(row_phys);
         put(12);
         put(26);
     }
@@ -355,9 +412,9 @@ void scr_scroll(int first, int n)
     scr_colour(C_TEXT);
     put(28);
     put(0);
-    put(scr_rows - 1);
+    put(phys(scr_rows - 1));
     put(phys_cols - 1);
-    put(first);
+    put(phys(first));
     for (k = 0; k < (n > 0 ? n : -n); k++) {
         put(23);
         put(7);
@@ -405,7 +462,7 @@ void scr_cursor(int x, int y, int show)
     if (show) {
         put(31);
         put(y == scr_rows ? x : x + scr_margin);
-        put(y);
+        put(phys(y));
     }
     put(23);
     put(1);

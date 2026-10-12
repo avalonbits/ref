@@ -14,7 +14,7 @@ source "$ROOT/test/emu.sh"
 
 AGONDEV=${AGONDEV:-$HOME/agondev}
 # MODES=<modes> runs only those; KEEP=<dir> keeps both sides' outputs there.
-MODES=${MODES:-norm lookup search from titles contents views layout79 layout39}
+MODES=${MODES:-info norm lookup search from titles contents views layout79 layout39}
 COMPILERS=${COMPILERS:-agondev acc}
 KEEP=${KEEP:-}
 ACC=${ACC:-$HOME/code/acc/bin/acc}
@@ -74,6 +74,7 @@ for m in norm lookup search from; do
     tr -d '\r' < "$Q/$m.txt" | "$TOOL" "$DAT" "$m" > "$P/$m.txt"
 done
 "$TOOL" "$DAT" titles > "$P/titles.txt"
+"$TOOL" "$DAT" info > "$P/info.txt"
 "$TOOL" "$DAT" contents > "$P/contents.txt"
 "$TOOL" "$DAT" views > "$P/views.bin"
 "$TOOL" "$DAT" layout 79 > "$P/layout79.txt"
@@ -111,7 +112,7 @@ on_agon() {
         case $m in
             norm|lookup|search|from)
                 printf 'reftool /lib/ref/ref.dat %s -i /q/%s.txt -o /o/%s.txt\r\n' "$m" "$m" "$m" ;;
-            titles|contents) printf 'reftool /lib/ref/ref.dat %s -o /o/%s.txt\r\n' "$m" "$m" ;;
+            info|titles|contents) printf 'reftool /lib/ref/ref.dat %s -o /o/%s.txt\r\n' "$m" "$m" ;;
             views) printf 'reftool /lib/ref/ref.dat views -o /o/views.bin\r\n' ;;
             layout*) printf 'reftool /lib/ref/ref.dat layout %s -o /o/%s.txt\r\n' "${m#layout}" "$m" ;;
         esac

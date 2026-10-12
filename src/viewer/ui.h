@@ -40,6 +40,8 @@ enum {
 void scr_open(void);
 void scr_close(void);
 void scr_cls(void);
+/* The title the top row shows, from the next scr_cls on. */
+void scr_set_header(const char* text);
 /* A row of text: from x, styled by colour role per character. Rows are
  * drawn whole: begin, add, end (which pads to the width). */
 void scr_begin(int row);

@@ -150,6 +150,9 @@ int main(int argc, char** argv)
         return 1;
     }
     if (strcmp(argv[2], "info") == 0) {
+        if (ref_book_title(&r, title, sizeof title) >= 0) {
+            fprintf(out_f, "title %s\n", title);
+        }
         fprintf(out_f, "commit %s\ndate %s\ntopics %u\nnodes %u\nkeys %lu\nwords %lu\nview %u\n",
                r.commit, r.date, r.ntopics, r.nnodes, (unsigned long)r.nkeys,
                (unsigned long)r.nwords, r.view_size);

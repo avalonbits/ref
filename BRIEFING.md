@@ -317,7 +317,11 @@ core at least).
   the status line, `VDU 23,7,0,dir,0`, then `VDU 26` -- and draws only the
   rows that came into view; longer jumps redraw, as a run of scrolls costs
   more than one repaint. The contents and lists likewise redraw only the
-  two rows a cursor move changes. The last row is a
+  two rows a cursor move changes. The top row is a
+  header, edge to edge: the wiki's own title (mkdocs.yml's `site_name`,
+  "Community Agon Platform documentation"), which ref.dat now carries --
+  flag bit 0 and a title offset in the header's spare bytes, so the format
+  stays version 1 and a file without it still opens. The last row is a
   status line, edge to edge: the topic's place in the tree, and how far
   down. Its last cell, the bottom right, cannot be printed in without the
   VDP scrolling, so it is painted instead: a one-cell text viewport

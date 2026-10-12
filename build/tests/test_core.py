@@ -172,6 +172,10 @@ class Core(unittest.TestCase):
                     self.assertEqual(st, layout.states(view, layout.lines(view, width)))
                 k += 2 + n
 
+    def test_book_title(self):
+        info = run('info').decode('latin-1')
+        self.assertIn('title Community Agon Platform documentation\n', info)
+
     def test_contents(self):
         b, _ = built()
         self.assertEqual(run('contents').decode('latin-1'), _contents_text(b))

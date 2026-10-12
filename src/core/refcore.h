@@ -27,6 +27,8 @@
 #define REF_ENOMEM     4
 #define REF_EIO        5    /* short read, or a section out of bounds */
 
+#define REF_HAS_TITLE  1    /* the header names the book's title */
+
 #define REF_KEY_MAX    255  /* the longest key or normalised query */
 #define REF_TITLE_MAX  255
 
@@ -50,6 +52,8 @@ typedef struct {
     FILE* f;
     char commit[13];
     char date[11];
+    uint16_t flags;         /* REF_HAS_TITLE */
+    uint32_t book_title;    /* into titles, when REF_HAS_TITLE */
     uint16_t ntopics;
     uint16_t nnodes;
     uint16_t nkb;           /* key blocks */
@@ -92,6 +96,10 @@ const uint8_t* ref_titles(ref_file* r);
 /* A title into buf, NUL-terminated; its length, or -1. */
 int ref_title(ref_file* r, uint32_t off, char* buf, int size);
 int ref_topic_title(ref_file* r, unsigned topic, char* buf, int size);
+
+/* The book's own title -- the wiki's, mkdocs.yml's site_name -- into buf;
+ * its length, or -1 if the file has none. */
+int ref_book_title(ref_file* r, char* buf, int size);
 
 /* Topic num's text, and its span's after it, into r->view; the length, or
  * -1. The text stays good until the next call. */
