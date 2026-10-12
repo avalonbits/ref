@@ -40,29 +40,46 @@ typedef struct {
     FILE* f;
     char* path;
     uint8_t* buf;
+    unsigned cap;           /* buf's size */
+    int moved;              /* read from since written: back to the end to write */
     unsigned n;             /* in buf: to write, or read and not yet taken */
     unsigned at;            /* reading: taken so far */
     unsigned long size;     /* written */
+    unsigned long on_card;  /* of that, what flush has put in the file */
     int failed;
 } file;
 
 static file text_file;
 static file words_file;
 static file keys_file;
+static file links_file;
 static file runs_file;
 static file doc;
 
+#define LINKS_BUF 512
+
+static int open_file_sized(file* f, const char* path, const char* suffix, const char* mode,
+                           unsigned cap);
+
 static int open_file(file* f, const char* path, const char* suffix, const char* mode)
+{
+    return open_file_sized(f, path, suffix, mode, CHUNK);
+}
+
+static int open_file_sized(file* f, const char* path, const char* suffix, const char* mode,
+                           unsigned cap)
 {
     f->path = md_realloc(NULL, (unsigned)(strlen(path) + strlen(suffix) + 1));
     strcpy(f->path, path);
     strcat(f->path, suffix);
     f->f = fopen(f->path, mode);
     if (!f->buf) {
-        f->buf = md_realloc(NULL, CHUNK);
+        f->buf = md_realloc(NULL, cap);
+        f->cap = cap;
     }
+    f->moved = 0;
     f->n = f->at = 0;
-    f->size = 0;
+    f->size = f->on_card = 0;
     f->failed = !f->f;
     if (!f->f) {
         md_error(f->path, 0, "cannot be written");
@@ -75,9 +92,18 @@ static int open_file(file* f, const char* path, const char* suffix, const char* 
 
 static void flush(file* f)
 {
+    if (f->moved && f->f) {
+        /* Back to where writing left off -- by where that is: agondev's
+         * fseek from SEEK_END goes nowhere. */
+        if (fseek(f->f, (long)f->on_card, SEEK_SET) != 0) {
+            f->failed = 1;
+        }
+        f->moved = 0;
+    }
     if (f->n && f->f && fwrite(f->buf, 1, f->n, f->f) != f->n) {
         f->failed = 1;
     }
+    f->on_card += f->n;
     f->n = 0;
 }
 
@@ -87,13 +113,13 @@ static void put(file* f, const void* p, unsigned n)
 
     f->size += n;
     while (n) {
-        unsigned k = CHUNK - f->n < n ? CHUNK - f->n : n;
+        unsigned k = f->cap - f->n < n ? f->cap - f->n : n;
 
         memcpy(f->buf + f->n, s, k);
         f->n += k;
         s += k;
         n -= k;
-        if (f->n == CHUNK) {
+        if (f->n == f->cap) {
             flush(f);
         }
     }
@@ -122,6 +148,40 @@ static unsigned get(file* f, uint8_t* p, unsigned n)
     return f->f ? (unsigned)fread(p, 1, n, f->f) : 0;
 }
 
+/* n bytes from at, of a file still being written, or as many as there are:
+ * from the card, as far as it is there, and the rest from what waits in buf
+ * to be written. */
+static unsigned read_at(file* f, unsigned long at, uint8_t* p, unsigned n)
+{
+    unsigned long on_card = f->on_card;
+    unsigned got;
+
+    if (at >= f->size) {
+        return 0;
+    }
+    if (n > f->size - at) {
+        n = (unsigned)(f->size - at);   /* no more than there is: a record near the end */
+    }
+    got = n;
+
+    if (at < on_card && f->f) {
+        unsigned k = at + n <= on_card ? n : (unsigned)(on_card - at);
+
+        f->moved = 1;
+        if (fseek(f->f, (long)at, SEEK_SET) != 0 || fread(p, 1, k, f->f) != k) {
+            f->failed = 1;
+        }
+        p += k;
+        at += k;
+        n -= k;
+    }
+    if (n) {
+        memcpy(p, f->buf + (at - on_card), n);
+    }
+
+    return got;
+}
+
 static void close_file(file* f, int keep)
 {
     if (f->f) {
@@ -143,7 +203,8 @@ int scratch_open(const char* out)
 {
     out_path = out;
     if (open_file(&text_file, out, "~t", "wb") != 0 || open_file(&words_file, out, "~w", "wb") != 0
-        || open_file(&keys_file, out, "~k", "wb") != 0) {
+        || open_file(&keys_file, out, "~k", "wb") != 0
+        || open_file_sized(&links_file, out, "~l", "w+b", LINKS_BUF) != 0) {
         scratch_close();
 
         return -1;
@@ -157,6 +218,7 @@ void scratch_close(void)
     close_file(&text_file, 0);
     close_file(&words_file, 0);
     close_file(&keys_file, 0);
+    close_file(&links_file, 0);
     close_file(&runs_file, 0);
 }
 
@@ -196,6 +258,28 @@ unsigned long write_text(const uint8_t* p, unsigned n)
     put(&text_file, p, n);
 
     return at;
+}
+
+/* The links waiting for a page to be read, <out>~l: a record appended,
+ * where it starts; and read back, from anywhere. A small buffer, as each
+ * record is read back on its own. */
+unsigned long links_put(const uint8_t* p, unsigned n)
+{
+    unsigned long at = links_file.size;
+
+    put(&links_file, p, n);
+
+    return at;
+}
+
+unsigned links_read(unsigned long at, uint8_t* p, unsigned n)
+{
+    return read_at(&links_file, at, p, n);
+}
+
+int links_failed(void)
+{
+    return links_file.failed;
 }
 
 void keys_put(const uint8_t* p, unsigned n)

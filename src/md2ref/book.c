@@ -473,16 +473,19 @@ int book_done(const char* title)
 
 /* --- links ------------------------------------------------------------------- */
 
-/* A link to a page not yet read: what it names, and where it is, kept
- * only until that page is read -- then its topic goes into its patch, as
- * acc settles a fixup as soon as its symbol is known, and it is freed: its
- * record for the next, its text with the page's others. In blocks, which
- * never move, with the free ones in a list. */
+/* A link to a page not yet read, kept only until that page is read --
+ * then its topic goes into its patches, as acc settles a fixup as soon as
+ * its symbol is known, and it is freed. What it names and where it is
+ * wait on the card, in the links file, as a record: its href's length,
+ * where the anchor starts in it (LINK_TOP for none), the page it is on and
+ * the line, then the href. In memory, only what links it to the rest. In
+ * blocks, which never move, with the free ones in a list. */
+#define LINK_HEAD  8
+#define LINK_TOP   0xFFFF
+#define LINK_WIN   512                  /* the links file, read back a window at a time */
+
 typedef struct {
-    const char* href;       /* as written, in the page's waiting_text */
-    int frag;               /* where the anchor starts in href, or -1 for the top */
-    int from;               /* the page it is on, and the line */
-    int no;
+    unsigned long at;       /* its record, in the links file */
     int patch;              /* its last placeholder's patch, or -1 until written: a
                              * link in a table's cell is written on each line it wraps
                              * to, and each patch leads to the one before */
@@ -610,10 +613,21 @@ int resolve_link(const page* p, int no, const char* href, int len)
 
         return -1;
     }
-    LINK(t).href = chunks_strndup(&pages[pi].waiting_text, href, (unsigned)len);
-    LINK(t).frag = flen ? plen + 1 : -1;
-    LINK(t).from = (int)(p - pages);
-    LINK(t).no = no;
+    {
+        uint8_t head[LINK_HEAD];
+        unsigned frag_at = flen ? (unsigned)plen + 1 : LINK_TOP;
+
+        head[0] = (uint8_t)((unsigned)len & 0xFF);
+        head[1] = (uint8_t)((unsigned)len >> 8);
+        head[2] = (uint8_t)(frag_at & 0xFF);
+        head[3] = (uint8_t)(frag_at >> 8);
+        head[4] = (uint8_t)(p - pages);
+        head[5] = (uint8_t)((unsigned)no & 0xFF);
+        head[6] = (uint8_t)((unsigned)no >> 8);
+        head[7] = (uint8_t)((unsigned)no >> 16);
+        LINK(t).at = links_put(head, LINK_HEAD);
+        links_put((const uint8_t*)href, (unsigned)len);
+    }
     LINK(t).patch = -1;
     LINK(t).next = pages[pi].waiting;
     pages[pi].waiting = t;
@@ -641,20 +655,62 @@ void link_placed(int link, unsigned k)
  * topics after these. */
 static void settle(int pi)
 {
+    static uint8_t win[LINK_WIN];
+    unsigned long win_at = 0;
+    unsigned win_len = 0;
+    char* href = NULL;
+    unsigned href_cap = 0;
     page* p = &pages[pi];
     int k = p->waiting;
     unsigned j;
     int* at_made;
     int m0 = p->ntopics ? TOPIC(p->first_topic).made : 0;
     int t;
+    int back = -1;
 
+    /* In the order they were written -- the list is newest first -- so that
+     * those near one another in the file are read a window at a time: each
+     * read of the card is a call to MOS, and a page's links come together. */
+    while (k >= 0) {
+        int next = LINK(k).next;
+
+        LINK(k).next = back;
+        back = k;
+        k = next;
+    }
+    k = back;
     while (k >= 0) {
         pending* l = &LINK(k);
         int next = l->next;
+        uint8_t head[LINK_HEAD];
+        unsigned len;
+        unsigned frag_at;
 
-        t = anchor_topic(pi, l->frag >= 0 ? l->href + l->frag : NULL);
+        if (l->at < win_at || l->at + LINK_HEAD > win_at + win_len) {
+            win_at = l->at;
+            win_len = links_read(win_at, win, LINK_WIN);
+        }
+        memcpy(head, win + (l->at - win_at), LINK_HEAD);
+        len = head[0] | (unsigned)head[1] << 8;
+        frag_at = head[2] | (unsigned)head[3] << 8;
+        if (len + 1 > href_cap) {
+            href_cap = len + 1;
+            href = md_realloc(href, href_cap);
+        }
+        if (l->at + LINK_HEAD + len > win_at + win_len && LINK_HEAD + len <= LINK_WIN) {
+            win_at = l->at;
+            win_len = links_read(win_at, win, LINK_WIN);
+        }
+        if (l->at + LINK_HEAD + len <= win_at + win_len) {
+            memcpy(href, win + (l->at + LINK_HEAD - win_at), len);
+        } else {
+            links_read(l->at + LINK_HEAD, (uint8_t*)href, len);     /* longer than the window */
+        }
+        href[len] = 0;
+        t = anchor_topic(pi, frag_at != LINK_TOP && frag_at <= len ? href + frag_at : NULL);
         if (t < 0) {
-            unresolved(pages[l->from].path, l->no, l->href, (int)strlen(l->href));
+            unresolved(pages[head[4]].path,
+                       (int)(head[5] | (unsigned)head[6] << 8 | (unsigned)head[7] << 16), href, (int)len);
         }
         for (j = (unsigned)l->patch; l->patch >= 0;) {
             unsigned v = patch_value(j);
@@ -670,7 +726,10 @@ static void settle(int pi)
         k = next;
     }
     p->waiting = -1;
-    chunks_free(&p->waiting_text);
+    free(href);
+    if (links_failed()) {
+        md_error("md2ref", 0, "the links file could not be written or read back");
+    }
 
     /* A topic's number as made, to its number: the page's were made one
      * after another, from m0. */

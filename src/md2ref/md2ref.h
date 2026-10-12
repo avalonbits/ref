@@ -76,14 +76,6 @@ typedef struct {
 arena_mark arena_here(void);
 void arena_back(arena_mark m);
 
-/* Chunks that never move, freed together: an arena of its own, for what
- * lasts as long as something else -- a link's text, as long as the page
- * it waits on is unread. */
-typedef struct chunk chunk;
-void* chunks_alloc(chunk** chunks, unsigned n);
-char* chunks_strndup(chunk** chunks, const char* s, unsigned n);
-void chunks_free(chunk** chunks);
-
 /* The source's arena: what parsing makes of the topic being read. */
 void* source_alloc(unsigned n);
 char* source_strndup(const char* s, unsigned n);
@@ -114,7 +106,6 @@ typedef struct {
     int ntopics;
     int done;               /* read: its anchors are known */
     int waiting;            /* the first link waiting for it to be read, or -1 */
-    chunk* waiting_text;    /* those links' text, freed once they are settled */
     unsigned patches_from;  /* the first patch made while it was read */
 } page;
 
@@ -343,6 +334,11 @@ unsigned add_patch(unsigned long at, unsigned value);
 void set_patch(unsigned k, unsigned value);
 unsigned patch_count(void);
 unsigned patch_value(unsigned k);
+/* The links file, <out>~l: a record appended, where it starts; read back
+ * from there, any time. Whether writing or reading it failed. */
+unsigned long links_put(const uint8_t* p, unsigned n);
+unsigned links_read(unsigned long at, uint8_t* p, unsigned n);
+int links_failed(void);
 /* The keys file, <out>~k: records appended; then read back from the start. */
 void keys_put(const uint8_t* p, unsigned n);
 int keys_rewind(void);

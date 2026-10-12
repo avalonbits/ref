@@ -529,6 +529,24 @@ class Md2ref(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stdout)
         self.assertEqual(ask(data, 'lookup', ['frob']).split(' |')[0], '1 1 3')
 
+    def test_links_waiting_on_the_card_then_more(self):
+        # The links waiting for a page are records in a scratch file, read
+        # back when it is read: b's here, from among d's, more than the
+        # file's buffer holds; and then c adds more for d, after that.
+        pages = {
+            'a.md': '# A\n\n' + ''.join('- [b%d](b.md#bt%d) [d%d](d.md#dt%d)\n' % (k, k % 2, k, k % 3)
+                                      for k in range(100)),
+            'b.md': '# B\n\n## BT0\n\nzero\n\n## BT1\n\none\n',
+            'c.md': '# C\n\n' + ''.join('- [c%d](d.md#dt%d)\n' % (k, k % 3) for k in range(100)),
+            'd.md': '# D\n\n## DT0\n\nzero\n\n## DT1\n\none\n\n## DT2\n\ntwo\n',
+        }
+        p, data, left = compile_pages(pages)
+        self.assertEqual(p.returncode, 0, p.stdout)
+        self.assertEqual(left, [])
+        text = b''.join(views(data))
+        self.assertEqual(text.count(b'\x14'), 300)
+        self.assertNotIn(b'\x14\xff\xff', text)
+
     def test_words_past_one_run(self):
         # More words than one 16 KB run of the words file holds: sorted in
         # runs, merged, every word still finds its topic.
