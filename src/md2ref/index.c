@@ -933,6 +933,9 @@ ALWAYS_INLINE int real_word(const uint8_t* w, unsigned len)
 
 void words_begin(int t)
 {
+    if (!word_char['a']) {
+        make_tables();                  /* before words_take, which inline.c calls */
+    }
     if (!slot) {
         slot_cap = FIRST_SLOTS;
         slot = md_realloc(NULL, slot_cap * (unsigned)sizeof(uint16_t));
@@ -989,6 +992,47 @@ static NOINLINE const uint8_t* between_words(const uint8_t* s, const uint8_t* e)
     }
 
     return s;
+}
+
+/* One word of markup, as inline.c writes it: taken where it lies when it
+ * is as it is, len bytes from w -- lower case, nothing inside it --
+ * and, from s to e, read again a letter at a time when a capital or a
+ * code is inside it, as words_markup reads one. */
+void words_take(const uint8_t* w, unsigned len)
+{
+    if (len > WORD_MAX) {
+        len = WORD_MAX;
+    }
+    if (len >= 3 && real_word(w, len)) {
+        word_seen(w, (uint8_t)len, 0);
+    }
+}
+
+void words_span(const uint8_t* s, const uint8_t* e)
+{
+    static uint8_t w[WORD_MAX + 1];
+    uint8_t* o = w;
+    unsigned len;
+
+    while (s < e) {
+        uint8_t b = *s;
+        uint8_t c = word_char[b];
+
+        if (c) {
+            if (o < w + WORD_MAX) {
+                *o++ = c;
+            }
+            s++;
+        } else if (b == REF_LINK) {
+            s += 3;
+        } else {
+            s++;                            /* a code: what is either side joins up */
+        }
+    }
+    len = (unsigned)(o - w);
+    if (len >= 3 && real_word(w, len)) {
+        word_seen(w, (uint8_t)len, 0);
+    }
 }
 
 void words_markup(const uint8_t* m, unsigned n)

@@ -129,7 +129,7 @@ static void put_inline(const page* p, int no, const char* s)
 
     room_for(want < TOPIC_MAX + 1 ? want : TOPIC_MAX + 1);
     inline_at = at;
-    n = inline_markup(p, no, s, buf + at, (int)(cap - at), resolve_link);
+    n = inline_markup(p, no, s, buf + at, (int)(cap - at), resolve_link, 1);
     if (n > (int)(cap - at)) {
         n = (int)(cap - at);                /* only past TOPIC_MAX: too big, said below */
         len = TOPIC_MAX + 1;
@@ -172,7 +172,7 @@ static cell styled_cell(const page* p, int no, const char* s, int slen)
 
     in_cell = 1;
     ncell = 0;
-    n = inline_markup(p, no, text, m, CELL_MAX, resolve_link);
+    n = inline_markup(p, no, text, m, CELL_MAX, resolve_link, 0);
     in_cell = 0;
     if (n > CELL_MAX) {
         n = CELL_MAX;
@@ -528,19 +528,32 @@ static void table(const page* p, const block* b)
     }
 }
 
+/* The words of the blocks rendered from start, read from their markup:
+ * for those whose words are not taken as they are written. */
+static void words_of(unsigned start)
+{
+    if (len <= TOPIC_MAX) {
+        words_markup(buf + start, len - start);
+    }
+}
+
 /* --- blocks and topics ---------------------------------------------------------------- */
 
+/* A code block's text: as put_inline puts inline Markdown, its words
+ * taken as it is written. Never longer than its text and a newline. */
 static void code(const char* s)
 {
-    while (*s) {
-        if (*s == '\n') {
-            put('\n');
-            s++;
-        } else {
-            put(agon_char(&s));
-        }
+    unsigned at = len < TOPIC_MAX ? len : TOPIC_MAX;
+    unsigned want = at + (unsigned)strlen(s) + 2;
+    int n;
+
+    room_for(want < TOPIC_MAX + 1 ? want : TOPIC_MAX + 1);
+    n = code_markup(s, buf + at, (int)(cap - at));
+    if (n > (int)(cap - at)) {
+        n = (int)(cap - at);                /* only past TOPIC_MAX: too big, said below */
+        len = TOPIC_MAX + 1;
     }
-    put('\n');
+    len += (unsigned)n;
 }
 
 static void one_block(const page* p, const block* b)
@@ -567,10 +580,16 @@ static void one_block(const page* p, const block* b)
         block_head(B_PRE, b->space, b->note, b->indent, 0);
         code(b->text);
         break;
-    case B_TABLE:
+    case B_TABLE: {
+        unsigned start = len;
+
         block_head(B_PRE, b->space, b->note, b->indent, 1);
         table(p, b);
-        break;
+        put(END);
+        words_of(start);                    /* laid out, its words are read from it */
+
+        return;
+    }
     case B_RULE:
         block_head(B_RULE, b->space, b->note, b->indent, b->indent);
         break;
@@ -669,9 +688,12 @@ void render_topic(int t, const block* b, int n)
     len = 0;
     nmarks = 0;
     ncell_links = 0;
+    words_begin(t);
+    words_text(tp->title, 1);           /* first: a word's posting says it is in the title */
     block_head(B_HEAD, 1, 0, tp->level >= 1 ? (tp->level > 4 ? 4 : tp->level) : 1, 0);
     if (tp->heading) {
         put_inline(p, b[0].no, b[0].text);
+        put(END);
         b++;
         n--;
     } else {
@@ -680,11 +702,13 @@ void render_topic(int t, const block* b, int n)
         while (*s) {
             put(agon_char(&s));
         }
+        put(END);
+        words_of(0);
     }
-    put(END);
     for (k = 0; k < n; k++) {
         one_block(p, &b[k]);
     }
+    words_end();
     too_big(t);
 
     /* Its size counts in its own and its ancestors', which are held, and
@@ -700,8 +724,6 @@ void render_topic(int t, const block* b, int n)
         hold[k].total += len;
         hold[k].descendants++;
     }
-    take_words(t, 0, tp->title);
-
     packed = pack(marks, nmarks);
     h = &hold[nheld < DEPTH ? nheld++ : DEPTH - 1];
     h->topic = t;

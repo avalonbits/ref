@@ -184,8 +184,13 @@ int split_row(const char* s, int len, const char** cells, int* lens, int max);
 typedef int (*link_fn)(const page* p, int no, const char* href, int len);
 
 /* Inline Markdown into markup bytes appended at out (size left in room):
- * how many were written. */
-int inline_markup(const page* p, int no, const char* s, uint8_t* out, int room, link_fn links);
+ * how many were written. With words, each word of it is taken as it is
+ * written, words_take or words_span, between words_begin and words_end. */
+int inline_markup(const page* p, int no, const char* s, uint8_t* out, int room, link_fn links,
+                  int words);
+/* A code block's text into markup at out, ending in a newline, its words
+ * taken as inline_markup takes them: how many bytes. */
+int code_markup(const char* s, uint8_t* out, int room);
 /* The plain text of inline Markdown, as a reader sees it, into out. */
 void inline_plain(const char* s, char* out, int size);
 /* The code spans of inline Markdown, in turn: the next from *at into out,
@@ -290,6 +295,11 @@ void words_begin(int t);
 /* The words of a topic's markup, n bytes of whole blocks. */
 void words_markup(const uint8_t* m, unsigned n);
 void words_text(const char* plain, int in_title);
+/* A word of markup as it is written (inline.c): len bytes as they are
+ * (lower case, nothing inside), or from s to e with a capital or a code
+ * inside, read as words_markup would. */
+void words_take(const uint8_t* w, unsigned len);
+void words_span(const uint8_t* s, const uint8_t* e);
 void words_end(void);
 /* The keys, from every topic's heading and title. */
 void keys_topic(int made, const char* title, const char* heading);

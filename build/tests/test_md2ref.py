@@ -377,6 +377,23 @@ class Md2ref(unittest.TestCase):
         self.assertEqual(ask(data, 'search', ['w0z', 'w7z', 'w199z']).splitlines(),
                          ['1 0:0:1', '1 0:1:1', '1 0:0:1'])
 
+    def test_words_are_taken_as_the_text_is_written(self):
+        # Each word is taken as it is written, not read again from the
+        # markup: one that codes run through joins up (foo**bar**baz),
+        # with a capital too, as one with only capitals inside does
+        # (MixedCase); a link inside one, whose topic number is
+        # the bytes 'a' and END, is not text; and a code block's words,
+        # one joined by an arrow the font shows as v.
+        heads = ''.join('## H%d\n\ntext\n\n' % k for k in range(1, 100))
+        page = ('# T\n\nfoo**bar**baz and Hel*lo*There MixedCase and pre[mid](#h97)post\n\n'
+                '```\nab↓cd\nline two\n```\n\n' + heads)
+        p, data, left = compile_pages({'index.md': page})
+        self.assertEqual(p.returncode, 0, p.stdout)
+        self.assertIn(b'pre\x14a\x00mid\x15post', b''.join(views(data)))
+        got = ask(data, 'search', ['foobarbaz', 'hellothere', 'mixedcase', 'premidpost', 'abvcd',
+                                   'two', 'barbaz', 'prea', 'mid']).splitlines()
+        self.assertEqual(got, ['1 0:0:1'] * 6 + ['0'] * 3)
+
     def test_text_is_compressed(self):
         # Ten words in an order that never repeats for long: LZ4 finds the
         # words again, through its hash of every four bytes. The whole

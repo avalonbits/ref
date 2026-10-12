@@ -93,6 +93,82 @@ static int room;
 static int written;
 static int last_space;          /* the last byte written was a space */
 
+/* What each byte is to the copy below (copy_text), by the table for the
+ * text being written: one look-up a byte says both whether the copy stops
+ * there and what it is to the words. */
+#define C_STOP  0               /* the copy stops: inlines looks at it, or agon_char */
+#define C_SPACE 1               /* a second one in a row dropped */
+#define C_GAP   2               /* between words */
+#define C_WORD  3               /* in a word as it is: a-z, 0-9, _ and $ */
+#define C_CAP   4               /* in a word, lower-cased: a capital */
+
+static uint8_t cls_special[256];    /* text, for inlines: \ ` < ! [ * _ stop it */
+static uint8_t cls_plain[256];      /* text as it is: only what agon_char changes stops it */
+static uint8_t cls_code[256];       /* code: spaces as they are, a newline stops it */
+
+/* The words of what is written, taken as it is written: when words_on,
+ * for a topic's markup, not a cell's or a title's. The word being
+ * written starts at w_start (NULL when none is); w_odd says a capital or
+ * a code is inside it, so words_span reads it again as words_markup
+ * would; and a LINK's two bytes are not text (w_skip). */
+static uint8_t words_on;
+static uint8_t* w_start;
+static uint8_t w_odd;
+static uint8_t w_skip;
+
+/* The word being written ends at end: taken. Not when the markup is past
+ * its room -- a topic too big, which is an error. */
+static NOINLINE void word_end(uint8_t* end)
+{
+    if (end <= out + room) {
+        if (w_odd) {
+            words_span(w_start, end);
+        } else if (end - w_start >= 3) {
+            words_take(w_start, (unsigned)(end - w_start));
+        }
+    }
+    w_start = NULL;
+}
+
+/* b, just written at out[written - 1], to the words: as words_markup
+ * reads markup -- a code inside a word joins up what is either side, a
+ * BREAK or a newline ends it, as any other byte not in a word does. */
+static NOINLINE void word_byte(uint8_t b)
+{
+    uint8_t k;
+
+    if (w_skip) {
+        w_skip--;
+        return;
+    }
+    if (b < 0x20) {
+        if (b == BREAK || b == '\n' || b == 0) {
+            if (w_start) {
+                word_end(out + written - 1);
+            }
+        } else {
+            w_odd |= w_start != NULL;
+            if (b == LINK) {
+                w_skip = 2;
+            }
+        }
+
+        return;
+    }
+    k = cls_plain[b];
+    if (k == C_WORD || k == C_CAP) {
+        if (!w_start) {
+            w_start = out + written - 1;
+            w_odd = 0;
+        }
+        if (k == C_CAP) {
+            w_odd = 1;
+        }
+    } else if (w_start) {
+        word_end(out + written - 1);
+    }
+}
+
 static void put(int b)
 {
     if (written < room) {
@@ -101,6 +177,9 @@ static void put(int b)
     written++;
     if (b >= 0x20) {
         last_space = b == ' ';
+    }
+    if (words_on) {
+        word_byte((uint8_t)b);
     }
 }
 
@@ -114,15 +193,14 @@ static void put_char(int c)
     put(c);
 }
 
-static int plain_run(const char* text, int k, int n, const uint8_t* stop);
-static uint8_t not_ascii[256];      /* only what agon_char changes */
+static int plain_run(const char* text, int k, int n, const uint8_t* cls);
 
 static void put_text(const char* s, int len)
 {
     int k = 0;
 
     while (k < len) {
-        k = plain_run(s, k, len, not_ascii);
+        k = plain_run(s, k, len, cls_plain);
         if (k < len) {
             const char* p = s + k;
 
@@ -132,65 +210,133 @@ static void put_text(const char* s, int len)
     }
 }
 
-/* The bytes that are not plain text as they are: what inlines looks at,
- * controls, and what agon_char changes. */
-static uint8_t special[256];
-
 static void make_special(void)
 {
     const char* m = "\\`<![*_";
     int c;
 
     for (c = 0; c < 256; c++) {
-        not_ascii[c] = special[c] = (uint8_t)(c < 0x20 || c >= 0x7F);
+        uint8_t k = C_GAP;
+
+        if (c < 0x20 || c >= 0x7F) {
+            k = C_STOP;
+        } else if (c == ' ') {
+            k = C_SPACE;
+        } else if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '$') {
+            k = C_WORD;
+        } else if (c >= 'A' && c <= 'Z') {
+            k = C_CAP;
+        }
+        cls_plain[c] = cls_special[c] = k;
+        cls_code[c] = k == C_SPACE ? C_GAP : k;
     }
     while (*m) {
-        special[(uint8_t)*m++] = 1;
+        cls_special[(uint8_t)*m++] = C_STOP;
     }
 }
 
-/* Text from k on, to the next byte stop says is not plain: most of every
- * page, put here in a tight loop -- a space after a space is dropped, as
- * put_char does -- and not a call or two a byte. Where it stops. */
-static int plain_run(const char* text, int k, int n, const uint8_t* stop)
+/* Where copy_text stopped in its source. */
+static const uint8_t* copied_to;
+
+/* Text from s to e into o, up to the first byte cls says stops it: most
+ * of every page, copied here in tight loops -- one between words, one in
+ * a word -- and not a call or two a byte. A space after a space is
+ * dropped, as put_char does; and each word, when words_on, is taken where
+ * it lies as it ends (word_end), a call a word. A word still being
+ * written where it stops stays open: what is written next may yet be in
+ * it. Where in o it got to. */
+static uint8_t* copy_text(const uint8_t* s, const uint8_t* e, uint8_t* o, const uint8_t* cls)
+{
+    uint8_t sp = (uint8_t)last_space;
+    uint8_t c;
+    uint8_t k;
+
+    if (w_start) {
+        goto in_word;
+    }
+    for (;;) {
+        for (;;) {                          /* between words */
+            if (s >= e) {
+                goto done;
+            }
+            c = *s;
+            k = cls[c];
+            if (k == C_GAP) {
+                *o++ = c;
+                s++;
+                sp = 0;
+            } else if (k == C_SPACE) {
+                s++;
+                if (!sp) {
+                    *o++ = ' ';
+                    sp = 1;
+                }
+            } else {
+                break;
+            }
+        }
+        if (k == C_STOP) {
+            goto done;
+        }
+        if (words_on) {
+            w_start = o;
+            w_odd = 0;
+        }
+in_word:
+        sp = 0;
+        for (;;) {                          /* in a word */
+            if (s >= e) {
+                goto done;
+            }
+            c = *s;
+            k = cls[c];
+            if (k == C_WORD) {
+                *o++ = c;
+                s++;
+            } else if (k == C_CAP) {
+                w_odd = 1;
+                *o++ = c;
+                s++;
+            } else {
+                break;
+            }
+        }
+        if (k == C_STOP) {
+            goto done;
+        }
+        if (w_start) {
+            word_end(o);
+        }
+    }
+done:
+    last_space = sp;
+    copied_to = s;
+
+    return o;
+}
+
+/* Text from k on, to the next byte cls says stops it: copy_text, or past
+ * the room -- a topic too big, which is an error anyway -- as put_char,
+ * a byte at a time, counting what does not fit. Where it stops. */
+static int plain_run(const char* text, int k, int n, const uint8_t* cls)
 {
     const uint8_t* s = (const uint8_t*)text + k;
     const uint8_t* e = (const uint8_t*)text + n;
-    uint8_t* o;
-    uint8_t* end;
-    uint8_t sp = (uint8_t)last_space;
+    uint8_t sp;
 
-    if ((unsigned)written + (unsigned)(n - k) > (unsigned)room) {
-        /* Past the room -- a topic too big, which is an error anyway: as
-         * put_char, a byte at a time, counting what does not fit. */
-        while (s < e && !stop[*s]) {
-            uint8_t c = *s++;
+    if ((unsigned)written + (unsigned)(n - k) <= (unsigned)room) {
+        uint8_t* o = out + written;
 
-            if (c == ' ') {
-                if (sp) {
-                    continue;
-                }
-                sp = 1;
-            } else {
-                sp = 0;
-            }
-            if (written < room) {
-                out[written] = c;
-            }
-            written++;
-        }
-        last_space = sp;
+        written += (int)(copy_text(s, e, o, cls) - o);
 
-        return (int)((const char*)s - text);
+        return (int)((const char*)copied_to - text);
     }
-    /* Room for all of it: through pointers, compared unsigned -- an int's
-     * < is a call to fix its flags, on every byte. */
-    o = out + written;
-    end = o;
-    while (s < e && !stop[*s]) {
+    w_start = NULL;
+    sp = (uint8_t)last_space;
+    while (s < e && cls[*s] != C_STOP) {
         uint8_t c = *s++;
 
-        if (c == ' ') {
+        if (cls[c] == C_SPACE) {
             if (sp) {
                 continue;
             }
@@ -198,9 +344,11 @@ static int plain_run(const char* text, int k, int n, const uint8_t* stop)
         } else {
             sp = 0;
         }
-        *end++ = c;
+        if (written < room) {
+            out[written] = c;
+        }
+        written++;
     }
-    written += (int)(end - o);
     last_space = sp;
 
     return (int)((const char*)s - text);
@@ -793,16 +941,20 @@ static void inlines_at(const char* s, int n, int in_link)
             const char* p = s + k;
 
             put_char(agon_char(&p));
-            k = plain_run(s, (int)(p - s), n, special);
+            k = plain_run(s, (int)(p - s), n, cls_special);
         }
     }
 }
 
-int inline_markup(const page* p, int no, const char* s, uint8_t* o, int size, link_fn links)
+int inline_markup(const page* p, int no, const char* s, uint8_t* o, int size, link_fn links,
+                  int words)
 {
-    if (!special[0]) {
+    if (!cls_plain['a']) {
         make_special();
     }
+    words_on = (uint8_t)words;
+    w_start = NULL;
+    w_skip = 0;
     out = o;
     room = size;
     written = 0;
@@ -815,11 +967,48 @@ int inline_markup(const page* p, int no, const char* s, uint8_t* o, int size, li
     ix_text_n = (int)strlen(s);
     scan_left = 2L * ix_text_n + 256;
     inlines(s, ix_text_n, 0);
+    if (w_start) {
+        word_end(out + written);            /* only codes and its END come after */
+    }
+    words_on = 0;
     ix_base = ix_text = NULL;
     /* No space to end with. */
     if (written > 0 && written <= room && out[written - 1] == ' ') {
         written--;
     }
+
+    return written;
+}
+
+/* --- code ------------------------------------------------------------------------- */
+
+int code_markup(const char* s, uint8_t* o, int size)
+{
+    const char* e = s + strlen(s);
+
+    if (!cls_plain['a']) {
+        make_special();
+    }
+    words_on = 1;
+    w_start = NULL;
+    w_skip = 0;
+    out = o;
+    room = size;
+    written = 0;
+    last_space = 1;
+    while (s < e) {
+        s += plain_run(s, 0, (int)(e - s), cls_code);
+        if (s < e) {
+            if (*s == '\n') {
+                put('\n');
+                s++;
+            } else {
+                put(agon_char(&s));
+            }
+        }
+    }
+    put('\n');
+    words_on = 0;
 
     return written;
 }
@@ -842,7 +1031,7 @@ void inline_plain(const char* s, char* o, int size)
     int n;
 
     plain_only = 1;
-    n = inline_markup(NULL, 0, s, buf, (int)sizeof buf, no_links);
+    n = inline_markup(NULL, 0, s, buf, (int)sizeof buf, no_links, 0);
     plain_only = 0;
     int j = 0;
     int k;
