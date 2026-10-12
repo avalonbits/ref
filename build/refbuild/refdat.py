@@ -146,117 +146,159 @@ def spans_for(book, own):
 
 
 def build(book, keys_index, rules, src):
-    plain = [render.topic(book, t) for t in book.topics]
-    spans = spans_for(book, [len(m) for m in plain])
-    # A topic shown without its descendants lists its children instead.
-    texts = [render.topic(book, t, menu=(spans[t.num] == 0 and bool(t.children)))
-             for t in book.topics]
-    n = len(texts)
-    view = max(sum(len(texts[k]) for k in range(num, num + spans[num] + 1))
-               for num in range(n))
-
+    """ref.dat for the book, its keys and the rules' normalising settings."""
+    texts, spans, view = _render(book)
     dictionary = train_dictionary(texts)
     packed = [lz4.compress(t, dictionary) for t in texts]
 
-    titles = bytearray()
-    title_off = {}
+    titles = _Titles()
+    topic_titles = [titles.add(t.title) for t in book.topics]
+    book_title = titles.add(book.title) if book.title else 0
+    nodes, nnodes = _contents(book, titles)
+    topics, text = _topics(book, texts, packed, spans, topic_titles)
+    keys, keydir, nkb, nkeys = _keys(keys_index)
+    index = fulltext.build([render.plain_text(m) for m in texts],
+                           [render.agon_bytes(t.title) for t in book.topics])
+    words, worddir, nwb, nwords = _words(index)
 
-    def title(s):
-        b = render.agon_bytes(s)[:255]
-        if b not in title_off:
-            title_off[b] = len(titles)
-            titles.extend(bytes([len(b)]) + b)
-
-        return title_off[b]
-
-    topic_titles = [title(t.title) for t in book.topics]
-    book_title = title(book.title) if book.title else 0
-
-    # Contents: nodes in preorder, so a node's first child is the next node.
-    nodes = []
-
-    def add_nodes(items):
-        first = None
-        prev = None
-        for it in items:
-            k = len(nodes)
-            nodes.append([title(it.title), NONE if it.topic is None else it.topic, NONE, NONE])
-            if first is None:
-                first = k
-            if prev is not None:
-                nodes[prev][3] = k
-            child = add_nodes(it.children)
-            nodes[k][2] = NONE if child is None else child
-            prev = k
-
-        return first
-
-    add_nodes(book.contents)
-
-    text = bytearray()
-    topics = bytearray()
-    for num, t in enumerate(book.topics):
-        if len(texts[num]) > 0xFFFF or len(packed[num]) > 0xFFFF:
-            raise ValueError(f'topic {num} {t.title!r} is too big')
-        topics += struct.pack('<IIHHHH', topic_titles[num], len(text), len(packed[num]),
-                              len(texts[num]), NONE if t.parent is None else t.parent, spans[num])
-        text += packed[num]
-
-    # Keys, sorted by their bytes, in front-coded blocks.
-    entries = sorted({(render.agon_bytes(k.key), k.topic) for k in keys_index.keys})
-    keys_data, keydir, nkb = _blocks([(k, struct.pack('<H', t)) for k, t in entries], KEY_BLOCK)
-
-    titles_plain = [render.agon_bytes(t.title) for t in book.topics]
-    index = fulltext.build([render.plain_text(m) for m in texts], titles_plain)
-    wentries = []
-    for w in sorted(index):
-        post = bytearray(varint(len(index[w])))
-        prev = 0
-        for t, ti in index[w]:
-            post += varint((t - prev) << 1 | (1 if ti else 0))
-            prev = t
-        wentries.append((w, bytes(post)))
-    words_data, worddir, nwb = _blocks(wentries, WORD_BLOCK)
-
-    norm = bytearray([len(rules.normalize.hex_after)])
-    for w in rules.normalize.hex_after:
-        norm += bytes([len(w)]) + w.encode()
-    norm.append(len(rules.normalize.skips))
-    for sk in rules.normalize.skips:
-        p = ' '.join(sk.prefix).encode()
-        norm += bytes([len(p)]) + p + bytes([len(sk.units)]) + bytes(sk.units)
-    stops = sorted(STOP_WORDS)
-    norm.append(len(stops))
-    for w in stops:
-        norm += bytes([len(w)]) + w.encode()
-
-    sections = [('nodes', b''.join(struct.pack('<IHHH', *nd) for nd in nodes)),
-                ('topics', bytes(topics)), ('titles', bytes(titles)), ('text', bytes(text)),
-                ('keys', keys_data), ('keydir', keydir), ('words', words_data),
-                ('worddir', worddir), ('norm', bytes(norm)), ('dict', dictionary)]
+    sections = [('nodes', nodes), ('topics', topics), ('titles', bytes(titles.data)),
+                ('text', text), ('keys', keys), ('keydir', keydir), ('words', words),
+                ('worddir', worddir), ('norm', _norm(rules)), ('dict', dictionary)]
     offs = {}
     body = bytearray()
     for name, data in sections:
         offs[name] = HEADER + len(body)
         body += data
-    size = HEADER + len(body)
 
-    commit = src.commit[:12].encode()
-    date = src.date.encode()
+    max_packed = max(len(p) for p in packed)
     head = struct.pack('<8sHH12s12sHHHHII' + 'I' * 10 + 'HHHHI',
-                       MAGIC, VERSION, 1 if book.title else 0, commit, date, n, len(nodes),
-                       nkb, nwb,
-                       len(entries), len(wentries),
+                       MAGIC, VERSION, 1 if book.title else 0,
+                       src.commit[:12].encode(), src.date.encode(),
+                       len(texts), nnodes, nkb, nwb, nkeys, nwords,
                        offs['nodes'], offs['topics'], offs['titles'], offs['text'],
                        offs['keys'], offs['keydir'], offs['words'], offs['worddir'],
                        offs['norm'], offs['dict'],
-                       len(dictionary), view, max(len(p) for p in packed), 0, size)
+                       len(dictionary), view, max_packed, 0, HEADER + len(body))
     head += struct.pack('<I', book_title)
     head += bytes(HEADER - len(head))
-    data = bytes(head) + bytes(body)
 
-    return Built(data, texts, spans, view, max(len(p) for p in packed), dictionary, index,
+    return Built(bytes(head) + bytes(body), texts, spans, view, max_packed, dictionary, index,
                  {name: len(d) for name, d in sections})
+
+
+def _render(book):
+    """Each topic's markup, how many topics after each are shown with it,
+    and the view buffer that needs: the most text one topic shows."""
+    plain = [render.topic(book, t) for t in book.topics]
+    spans = spans_for(book, [len(m) for m in plain])
+    # A topic shown without its descendants lists its children instead.
+    texts = [render.topic(book, t, menu=(spans[t.num] == 0 and bool(t.children)))
+             for t in book.topics]
+    view = max(sum(len(texts[k]) for k in range(num, num + spans[num] + 1))
+               for num in range(len(texts)))
+
+    return texts, spans, view
+
+
+class _Titles:
+    """The titles section: each title once, as a length byte and its bytes."""
+
+    def __init__(self):
+        self.data = bytearray()
+        self.at = {}
+
+    def add(self, s):
+        b = render.agon_bytes(s)[:255]
+        if b not in self.at:
+            self.at[b] = len(self.data)
+            self.data += bytes([len(b)]) + b
+
+        return self.at[b]
+
+
+def _contents(book, titles):
+    """The contents tree as nodes in preorder, so a node's first child is the
+    node after it: the section's bytes, and how many nodes."""
+    nodes = []
+
+    def add(items):
+        first = prev = None
+        for it in items:
+            k = len(nodes)
+            nodes.append([titles.add(it.title), NONE if it.topic is None else it.topic,
+                          NONE, NONE])
+            if first is None:
+                first = k
+            if prev is not None:
+                nodes[prev][3] = k                  # the next sibling
+            child = add(it.children)
+            nodes[k][2] = NONE if child is None else child
+            prev = k
+
+        return first
+
+    add(book.contents)
+
+    return b''.join(struct.pack('<IHHH', *nd) for nd in nodes), len(nodes)
+
+
+def _topics(book, texts, packed, spans, topic_titles):
+    """The topics section and the text section."""
+    topics = bytearray()
+    text = bytearray()
+    for num, t in enumerate(book.topics):
+        if len(texts[num]) > 0xFFFF or len(packed[num]) > 0xFFFF:
+            raise ValueError(f'topic {num} {t.title!r} is too big')
+        topics += struct.pack('<IIHHHH', topic_titles[num], len(text), len(packed[num]),
+                              len(texts[num]), NONE if t.parent is None else t.parent,
+                              spans[num])
+        text += packed[num]
+
+    return bytes(topics), bytes(text)
+
+
+def _keys(keys_index):
+    """The keys, sorted by their bytes, in front-coded blocks: the section,
+    its directory, how many blocks and how many keys."""
+    entries = sorted({(render.agon_bytes(k.key), k.topic) for k in keys_index.keys})
+    data, directory, nblocks = _blocks([(k, struct.pack('<H', t)) for k, t in entries],
+                                       KEY_BLOCK)
+
+    return data, directory, nblocks, len(entries)
+
+
+def _words(index):
+    """The full-text index, as the keys are, each word with its topics."""
+    entries = []
+    for w in sorted(index):
+        post = bytearray(varint(len(index[w])))
+        prev = 0
+        for t, in_title in index[w]:
+            post += varint((t - prev) << 1 | (1 if in_title else 0))
+            prev = t
+        entries.append((w, bytes(post)))
+    data, directory, nblocks = _blocks(entries, WORD_BLOCK)
+
+    return data, directory, nblocks, len(entries)
+
+
+def _norm(rules):
+    """The normalising settings: hex_after words, skips, stop words."""
+    def string(b):
+        return bytes([len(b)]) + b
+
+    norm = bytearray([len(rules.normalize.hex_after)])
+    for w in rules.normalize.hex_after:
+        norm += string(w.encode())
+    norm.append(len(rules.normalize.skips))
+    for sk in rules.normalize.skips:
+        norm += string(' '.join(sk.prefix).encode()) + bytes([len(sk.units)]) + bytes(sk.units)
+    stops = sorted(STOP_WORDS)
+    norm.append(len(stops))
+    for w in stops:
+        norm += string(w.encode())
+
+    return bytes(norm)
 
 
 def _blocks(entries, per):

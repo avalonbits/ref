@@ -141,6 +141,24 @@ def is_blank(s):
     return not s.strip()
 
 
+def next_text(lines, i):
+    """The first line from i that is not blank, or len(lines)."""
+    while i < len(lines) and is_blank(lines[i][1]):
+        i += 1
+
+    return i
+
+
+def is_atx_heading(s):
+    """Is s a `#` heading -- `#` alone, or `#`s and a space and text?"""
+    if indent_of(s) >= 4:
+        return None
+    t = s.lstrip(' ')
+    m = HEADING.match(t)
+
+    return m if m and (m.group(2) is not None or t.strip() == m.group(1)) else None
+
+
 def parse(text):
     """Parses a page's Markdown into a Page."""
     raw = text.replace('\r\n', '\n').replace('\r', '\n').split('\n')
@@ -198,8 +216,8 @@ class _BlockParser:
                 i = self._fence(lines, i, m, out)
                 continue
 
-            m = HEADING.match(s.lstrip(' ')) if indent_of(s) < 4 else None
-            if m and (m.group(2) is not None or s.strip() == m.group(1)):
+            m = is_atx_heading(s)
+            if m:
                 out.append(self._heading(m, ln))
                 i += 1
                 continue
@@ -261,12 +279,10 @@ class _BlockParser:
             return True
         if i + 1 < len(lines) and SETEXT.match(lines[i + 1][1]) and indent_of(s) < 4:
             return True
+        if is_atx_heading(s):
+            return True
         if indent_of(s) < 4:
-            t = s.lstrip(' ')
             if FENCE.match(s) or ADMONITION.match(s) or QUOTE.match(s):
-                return True
-            m = HEADING.match(t)
-            if m and (m.group(2) is not None or t.strip() == m.group(1)):
                 return True
             m = LIST_ITEM.match(s)
             if m and m.group(4).strip():
@@ -329,9 +345,7 @@ class _BlockParser:
             s = lines[i][1]
             if is_blank(s):
                 # Blank lines inside the block are kept, trailing ones not.
-                j = i
-                while j < len(lines) and is_blank(lines[j][1]):
-                    j += 1
+                j = next_text(lines, i)
                 if j < len(lines) and indent_of(lines[j][1]) >= 4:
                     body.extend([''] * (j - i))
                     i = j
@@ -351,9 +365,7 @@ class _BlockParser:
         while i < len(lines):
             s = lines[i][1]
             if is_blank(s):
-                j = i
-                while j < len(lines) and is_blank(lines[j][1]):
-                    j += 1
+                j = next_text(lines, i)
                 if j < len(lines) and indent_of(lines[j][1]) >= width:
                     body.extend((lines[k][0], '') for k in range(i, j))
                     i = j
@@ -450,18 +462,27 @@ class _BlockParser:
         return i
 
     def _list(self, lines, i, out):
+        """A list: items at one indent, each with whatever is indented under
+        it -- by two spaces or more, not Python-Markdown's four, since the
+        wiki's authors nest by two as often as by four."""
         ln = lines[i][0]
         first = LIST_ITEM.match(lines[i][1])
         base = len(first.group(1))
         ordered = first.group(2)[0].isdigit()
         start = int(first.group(2)[:-1]) if ordered else 1
+
+        def item_here(s):
+            """An item of this list: a bullet at its indent (or one more)."""
+            m = LIST_ITEM.match(s)
+            if m and base <= len(m.group(1)) < base + 2 and m.group(2)[0].isdigit() == ordered:
+                return m
+
+            return None
+
         items = []
         while i < len(lines):
-            m = LIST_ITEM.match(lines[i][1])
-            if not m or len(m.group(1)) != base and not (
-                    len(m.group(1)) < base + 2 and len(m.group(1)) >= base):
-                break
-            if m.group(2)[0].isdigit() != ordered:
+            m = item_here(lines[i][1])
+            if not m:
                 break
             # The item's content column: where its text starts.
             content = len(m.group(1)) + len(m.group(2)) + max(1, len(m.group(3)))
@@ -470,9 +491,8 @@ class _BlockParser:
             while i < len(lines):
                 s = lines[i][1]
                 if is_blank(s):
-                    j = i
-                    while j < len(lines) and is_blank(lines[j][1]):
-                        j += 1
+                    # Blank lines, then more indented under the item: still it.
+                    j = next_text(lines, i)
                     if j < len(lines) and indent_of(lines[j][1]) > base \
                             and not (LIST_ITEM.match(lines[j][1])
                                      and indent_of(lines[j][1]) < base + 2):
@@ -481,8 +501,7 @@ class _BlockParser:
                         continue
                     break
                 ind = indent_of(s)
-                mm = LIST_ITEM.match(s)
-                if mm and ind < base + 2:
+                if LIST_ITEM.match(s) and ind < base + 2:
                     break                       # the next item, or a list after
                 if ind > base:
                     # Nested content: dedented to the item's content column,
@@ -491,16 +510,14 @@ class _BlockParser:
                     i += 1
                     continue
                 # A lazy continuation of the item's paragraph.
-                if not self._starts_block(lines, i) and body and not is_blank(body[-1][1]):
+                if not self._starts_block(lines, i) and not is_blank(body[-1][1]):
                     body.append((lines[i][0], s.strip()))
                     i += 1
                     continue
                 break
             items.append(self._blocks(body))
             # A blank line, then the next item at the same indent: same list.
-            j = i
-            while j < len(lines) and is_blank(lines[j][1]):
-                j += 1
+            j = next_text(lines, i)
             if j < len(lines):
                 mm = LIST_ITEM.match(lines[j][1])
                 if mm and len(mm.group(1)) == base and mm.group(2)[0].isdigit() == ordered:
@@ -650,7 +667,7 @@ class Inline:
                 if r:
                     label, href, end = r
                     flush()
-                    out.append(('img', _plain(self._parse(label)), href))
+                    out.append(('img', plain(self._parse(label)), href))
                     k = end
                     continue
             if ch == '[':
@@ -754,29 +771,22 @@ class Inline:
             return None
         if ch == '_' and before.isalnum():
             return None                         # intraword: mos_getkey
-        for width in (min(run, 3), 2, 1):
-            if width > run:
-                continue
-            e = self._close(s, ch, width, k + width)
-            if e < 0:
-                continue
-            inner = s[k + width:e]
-            if not inner.strip():
-                continue
-            kids = self._parse(inner)
-            if width == 3:
-                node = ('strong', [('em', kids)])
-            elif width == 2:
-                node = ('strong', kids)
-            else:
-                node = ('em', kids)
-            lead = run - width
-            if lead:
-                return None                     # mismatched runs: leave as text
+        # A run of one, two or three opens em, strong or both, closed by a
+        # run as long; anything else is text.
+        if run > 3:
+            return None
+        e = self._close(s, ch, run, k + run)
+        if e < 0 or not s[k + run:e].strip():
+            return None
+        kids = self._parse(s[k + run:e])
+        if run == 3:
+            node = ('strong', [('em', kids)])
+        elif run == 2:
+            node = ('strong', kids)
+        else:
+            node = ('em', kids)
 
-            return node, e + width
-
-        return None
+        return node, e + run
 
     def _close(self, s, ch, width, start):
         j = start
@@ -833,10 +843,6 @@ def _merge(nodes):
             out.append(nd)
 
     return out
-
-
-def _plain(nodes):
-    return plain(nodes)
 
 
 def plain(nodes):

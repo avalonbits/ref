@@ -107,93 +107,105 @@ def plot_codes(text):
 
 
 def build(book, rules):
+    """The keys every topic's heading gives by its page's rules, and its
+    title's words; the gaps; and the rules that matched nothing."""
     cfg = rules.normalize
-    found = {}                      # topic -> set of keys from rules
-    words = {}                      # topic -> set of keys from title words
-    used = set()
+    by_rule = {}                    # topic -> keys its page's rules gave
+    by_words = {}                   # topic -> keys from its title's words
+    used = set()                    # (page, kind, index) of rules that matched
 
-    def add(num, text, rule=True):
-        """A key for a topic: text is normalised here, so rules can say
-        `VDU 23, 0, &A0` and match what the user types."""
+    def add(to, num, text):
+        # Normalised here, so a rule can say `VDU 23, 0, &A0` and match what
+        # the user types.
         k = normalize(text, cfg)
         if k:
-            (found if rule else words).setdefault(num, set()).add(k)
+            to.setdefault(num, set()).add(k)
 
     for t in book.topics:
-        title = t.title
-        for w in title_words(title):
-            add(t.num, w, False)
+        for w in title_words(t.title):
+            add(by_words, t.num, w)
         pr = rules.pages.get(t.page)
         if pr is None:
             continue
-        heading = t.heading.inlines if t.heading else []
-        codes = _code_spans(heading)
+        for text in _rule_keys(t, pr, cfg, used):
+            add(by_rule, t.num, text)
 
-        if pr.vdu:
-            got = False
-            # A heading that is itself a sequence, without code: the
-            # `VDU 23, 27: Bitmaps, sprites, and mouse cursor` of a page top.
-            if not codes and title.upper().startswith('VDU '):
-                codes = [title]
-            for c in codes:
-                k = vdu_key(c, cfg)
-                if k:
-                    add(t.num, k)
-                    got = True
-            if not got and t.blocks and isinstance(t.blocks[0], md.Para):
-                for c in _code_spans(t.blocks[0].inlines)[:1]:
-                    k = vdu_key(c, cfg)
-                    if k:
-                        add(t.num, k)
-
-        if pr.heading_code:
-            for c in _code_spans(heading):
-                add(t.num, c)
-
-        if pr.plot:
-            m = re.search(r'PLOT codes (.*?)\)', title)
-            if m:
-                for code in plot_codes(m.group(1)):
-                    add(t.num, f'plot {code}')
-                    add(t.num, f'vdu 25 {code}')
-
-        for i, r in enumerate(pr.heading):
-            m = re.search(r['match'], title)
-            if m:
-                used.add((t.page, 'heading', i))
-                for tpl in r['keys']:
-                    add(t.num, _fill(tpl, m))
-
-        for i, r in enumerate(pr.code):
-            for b in _all_blocks(t.blocks):
-                if isinstance(b, md.Code):
-                    for line in b.text.split('\n'):
-                        m = re.search(r['match'], line)
-                        if m:
-                            used.add((t.page, 'code', i))
-                            add(t.num, m.group(1))
-
-        for i, r in enumerate(pr.body):
-            for b in _all_blocks(t.blocks):
-                if isinstance(b, md.Para):
-                    for m in re.finditer(r['match'], _marked(b.inlines)):
-                        used.add((t.page, 'body', i))
-                        for c in re.findall(r'`([^`]+)`', m.group(1)):
-                            add(t.num, c)
-
-    for i, k in enumerate(rules.keys):
+    for k in rules.keys:
         num = _key_topic(book, k)
         if num is None:
             raise ValueError(f'[[key]] {k}: no such page or anchor')
         for text in k['keys']:
-            add(num, text)
+            add(by_rule, num, text)
 
+    pairs = {(k, num) for src in (by_rule, by_words) for num, ks in src.items() for k in ks}
+
+    return Index([Key(k, n) for k, n in sorted(pairs)],
+                 _gaps(book, rules, by_rule), _unused(book, rules, used))
+
+
+def _rule_keys(t, pr, cfg, used):
+    """The keys topic t's page rules give it, as written (not normalised)."""
+    out = []
+    heading = t.heading.inlines if t.heading else []
+    if pr.vdu:
+        out += _vdu_keys(t, heading, cfg)
+    if pr.heading_code:
+        out += _code_spans(heading)
+    if pr.plot:
+        m = re.search(r'PLOT codes (.*?)\)', t.title)
+        if m:
+            for code in plot_codes(m.group(1)):
+                out += [f'plot {code}', f'vdu 25 {code}']
+    for i, r in enumerate(pr.heading):
+        m = re.search(r['match'], t.title)
+        if m:
+            used.add((t.page, 'heading', i))
+            out += [_fill(tpl, m) for tpl in r['keys']]
+    for i, r in enumerate(pr.code):
+        for b in _all_blocks(t.blocks):
+            if isinstance(b, md.Code):
+                for line in b.text.split('\n'):
+                    m = re.search(r['match'], line)
+                    if m:
+                        used.add((t.page, 'code', i))
+                        out.append(m.group(1))
+    for i, r in enumerate(pr.body):
+        for b in _all_blocks(t.blocks):
+            if isinstance(b, md.Para):
+                for m in re.finditer(r['match'], _marked(b.inlines)):
+                    used.add((t.page, 'body', i))
+                    out += re.findall(r'`([^`]+)`', m.group(1))
+
+    return out
+
+
+def _vdu_keys(t, heading, cfg):
+    """The VDU sequences a heading names, in its code -- or, a heading that
+    is a sequence itself (`VDU 23, 27: Bitmaps ...`), in its text -- or else
+    in the code the topic opens with."""
+    codes = _code_spans(heading)
+    if not codes and t.title.upper().startswith('VDU '):
+        codes = [t.title]
+    keys = [k for k in (vdu_key(c, cfg) for c in codes) if k]
+    if not keys and t.blocks and isinstance(t.blocks[0], md.Para):
+        keys = [k for k in (vdu_key(c, cfg) for c in _code_spans(t.blocks[0].inlines)[:1]) if k]
+
+    return keys
+
+
+def _gaps(book, rules, by_rule):
+    """Headings on a page with rules (not prose) that no rule gave a key."""
     gaps = []
     for t in book.topics:
         pr = rules.pages.get(t.page)
-        if t.num not in found and not (pr and pr.prose):
+        if t.num not in by_rule and not (pr and pr.prose):
             gaps.append((t.page, t.line, t.title))
 
+    return gaps
+
+
+def _unused(book, rules, used):
+    """Rules for pages the wiki no longer has, and rules that match nothing."""
     unused = []
     for page, pr in rules.pages.items():
         if page not in book.pages:
@@ -203,14 +215,7 @@ def build(book, rules):
                 if (page, kind, i) not in used:
                     unused.append(f'[[page.{kind}]] on {page} matches nothing: {r["match"]}')
 
-    pairs = set()
-    for src in (found, words):
-        for num, ks in src.items():
-            for k in ks:
-                pairs.add((k, num))
-    keys = [Key(k, n) for k, n in sorted(pairs)]
-
-    return Index(keys, gaps, unused)
+    return unused
 
 
 def _fill(tpl, m):

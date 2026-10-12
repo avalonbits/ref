@@ -225,8 +225,13 @@ def _wrap(chars, width):
                 lines.append(cur)
                 cur = []
             if cur:
-                cur.append((ord(' '),) + cur[-1][1:] if cur[-1][3] == w[0][3] else
-                           (ord(' '), False, False, None))
+                # The space between two words of one link is part of it, in
+                # its style; any other space is plain.
+                prev = cur[-1]
+                if prev[3] == w[0][3]:
+                    cur.append((ord(' '),) + prev[1:])
+                else:
+                    cur.append((ord(' '), False, False, None))
             cur += w
         lines.append(cur)
 
