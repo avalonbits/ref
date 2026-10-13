@@ -203,7 +203,6 @@ static cell styled_cell(const page* p, int no, const char* s, int slen)
     uint16_t link = NO_LINK;
     unsigned line_run = 0;
     unsigned word_run = 0;
-    int k;
 
     in_cell = 1;
     ncell = 0;
@@ -213,50 +212,57 @@ static cell styled_cell(const page* p, int no, const char* s, int slen)
         n = CELL_MAX;
     }
     out.c = source_alloc((unsigned)(n + 1) * sizeof(styled));
-    out.n = 0;
     out.widest = 0;
     out.longest = 0;
     out.broken = 0;
-    for (k = 0; k < n; k++) {
-        int b = m[k];
+    {
+        /* By pointer, compared unsigned: an int's < is a call (zap's guide). */
+        const uint8_t* q = m;
+        const uint8_t* qe = m + n;
+        styled* c = out.c;
 
-        if (b == EM_ON || b == EM_OFF) {
-            em = b == EM_ON;
-        } else if (b == CODE_ON || b == CODE_OFF) {
-            code = b == CODE_ON;
-        } else if (b == LINK && k + 2 < n) {
-            int j;
+        for (; q < qe; q++) {
+            uint8_t b = *q;
 
-            link = (uint16_t)(m[k + 1] | m[k + 2] << 8);
-            for (j = 0; j < ncell; j++) {
-                if (cell_pos[j] == (unsigned)k + 1 && ncell_links < 256) {
-                    cell_links[ncell_links] = cell_link[j];
-                    link = (uint16_t)(0x8000 | ncell_links++);
+            if (b == EM_ON || b == EM_OFF) {
+                em = b == EM_ON;
+            } else if (b == CODE_ON || b == CODE_OFF) {
+                code = b == CODE_ON;
+            } else if (b == LINK && q + 2 < qe) {
+                unsigned at = (unsigned)(q - m) + 1;
+                int j;
+
+                link = (uint16_t)(q[1] | q[2] << 8);
+                for (j = 0; j < ncell; j++) {
+                    if (cell_pos[j] == at && ncell_links < 256) {
+                        cell_links[ncell_links] = cell_link[j];
+                        link = (uint16_t)(0x8000 | ncell_links++);
+                    }
                 }
-            }
-            k += 2;
-        } else if (b == LINK_END) {
-            link = NO_LINK;
-        } else if (b >= 0x20 || b == BREAK) {
-            styled* c = &out.c[out.n++];
-
-            c->ch = (uint8_t)(b == BREAK ? '\n' : b);
-            c->style = (uint8_t)((em ? ST_EM : 0) | (code ? ST_CODE : 0));
-            c->link = link;
-            if (b == BREAK) {
-                line_run = word_run = 0;
-                out.broken = 1;
-            } else {
-                if (++line_run > out.widest) {
-                    out.widest = (uint16_t)line_run;
-                }
-                if (b == ' ') {
-                    word_run = 0;
-                } else if (++word_run > out.longest) {
-                    out.longest = (uint16_t)word_run;
+                q += 2;
+            } else if (b == LINK_END) {
+                link = NO_LINK;
+            } else if (b >= 0x20 || b == BREAK) {
+                c->ch = (uint8_t)(b == BREAK ? '\n' : b);
+                c->style = (uint8_t)((em ? ST_EM : 0) | (code ? ST_CODE : 0));
+                c->link = link;
+                c++;
+                if (b == BREAK) {
+                    line_run = word_run = 0;
+                    out.broken = 1;
+                } else {
+                    if (++line_run > out.widest) {
+                        out.widest = (uint16_t)line_run;
+                    }
+                    if (b == ' ') {
+                        word_run = 0;
+                    } else if (++word_run > out.longest) {
+                        out.longest = (uint16_t)word_run;
+                    }
                 }
             }
         }
+        out.n = (int)(c - out.c);
     }
 
     return out;
@@ -266,36 +272,42 @@ static cell styled_cell(const page* p, int no, const char* s, int slen)
  * how many lines. Breaks at spaces; a word wider than the column is cut. */
 static int wrap_cell(const cell* c, int width, uint16_t* from, uint16_t* to, int max)
 {
+    /* By pointer, compared unsigned: an int's < is a call to set its
+     * flags (zap's guide), and these loops go over every character. */
+    const styled* base = c->c;
+    const styled* end = base + c->n;
+    const styled* p = base;
     int lines = 0;
-    int k = 0;
 
-    while (k <= c->n && lines < max) {
-        int start;
-        int last_space = -1;
-        int j;
+    while (p <= end && lines < max) {
+        const styled* start;
+        const styled* last_space = NULL;
+        const styled* stop;
+        const styled* j;
+        const styled* t;
 
-        while (k < c->n && c->c[k].ch == ' ') {
-            k++;
+        while (p < end && p->ch == ' ') {
+            p++;
         }
-        start = k;
-        for (j = k; j < c->n && c->c[j].ch != '\n' && j - start < width; j++) {
-            if (c->c[j].ch == ' ') {
+        start = p;
+        stop = (unsigned)(end - p) > (unsigned)width ? p + width : end;
+        for (j = p; j < stop && j->ch != '\n'; j++) {
+            if (j->ch == ' ') {
                 last_space = j;
             }
         }
-        if (j < c->n && c->c[j].ch != '\n' && c->c[j].ch != ' ' && last_space > start) {
+        if (j < end && j->ch != '\n' && j->ch != ' ' && last_space && last_space > start) {
             j = last_space;                 /* break at the last space */
         }
-        from[lines] = (uint16_t)start;
-        to[lines] = (uint16_t)j;
-        while (to[lines] > from[lines] && c->c[to[lines] - 1].ch == ' ') {
-            to[lines]--;
+        for (t = j; t > start && t[-1].ch == ' '; t--) {
         }
+        from[lines] = (uint16_t)(start - base);
+        to[lines] = (uint16_t)(t - base);
         lines++;
-        if (j >= c->n) {
+        if (j >= end) {
             break;
         }
-        k = c->c[j].ch == '\n' ? j + 1 : j;
+        p = j->ch == '\n' ? j + 1 : j;
     }
 
     return lines ? lines : 1;
