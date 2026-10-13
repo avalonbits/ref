@@ -139,6 +139,24 @@ static void put_inline(const page* p, int no, const char* s, int words)
     len += (unsigned)n;
 }
 
+/* n of the byte b: at once, but past TOPIC_MAX, where put counts them. */
+static void put_run(int b, int n)
+{
+    if (n <= 0) {
+        return;
+    }
+    if (len + (unsigned)n > TOPIC_MAX) {
+        while (n-- > 0) {
+            put(b);
+        }
+
+        return;
+    }
+    room_for(len + (unsigned)n);
+    memset(buf + len, b, (size_t)n);
+    len += (unsigned)n;
+}
+
 static void put_ascii(const char* s)
 {
     while (*s) {
@@ -283,8 +301,9 @@ static int wrap_cell(const cell* c, int width, uint16_t* from, uint16_t* to, int
     return lines ? lines : 1;
 }
 
-/* Styled characters from..to as markup, every style closed at the end. */
-static void emit_styled(const cell* c, int from, int to, int force_em)
+/* Styled characters from..to as markup, every style closed at the end:
+ * a byte at a time through put, for a topic that may pass TOPIC_MAX. */
+static void emit_styled_slow(const cell* c, int from, int to, int force_em)
 {
     int em = 0;
     int code = 0;
@@ -339,6 +358,76 @@ static void emit_styled(const cell* c, int from, int to, int force_em)
     if (link != NO_LINK) {
         put(LINK_END);
     }
+}
+
+/* The same, written straight into the buffer: a character, a style or a
+ * link at most nine bytes each, room for which is made first. A style is
+ * compared as one byte, em and code together; a link as before. */
+static void emit_styled(const cell* c, int from, int to, int force_em)
+{
+    unsigned most = 9u * (unsigned)(to - from) + 8u;
+    const styled* s = c->c + from;
+    const styled* e = c->c + to;
+    uint8_t fe = force_em ? ST_EM : 0;
+    uint8_t st = 0;                     /* em and code, as open */
+    uint16_t link = NO_LINK;
+    uint8_t* o;
+
+    if (len + most > TOPIC_MAX) {
+        emit_styled_slow(c, from, to, force_em);
+
+        return;
+    }
+    room_for(len + most);
+    o = buf + len;
+    for (; s < e; s++) {
+        uint8_t want = (uint8_t)(s->style | fe);
+
+        if (s->link != link) {
+            if (st & ST_CODE) {
+                *o++ = CODE_OFF;
+            }
+            if (st & ST_EM) {
+                *o++ = EM_OFF;
+            }
+            st = 0;
+            if (link != NO_LINK) {
+                *o++ = LINK_END;
+            }
+            if (s->link != NO_LINK && (s->link & 0x8000)) {
+                *o++ = LINK;                /* a placeholder, again */
+                len = (unsigned)(o - buf);
+                add_mark(len, cell_links[s->link & 0x7FFF]);
+                *o++ = NONE & 0xFF;
+                *o++ = NONE >> 8;
+            } else if (s->link != NO_LINK) {
+                *o++ = LINK;
+                *o++ = (uint8_t)(s->link & 0xFF);
+                *o++ = (uint8_t)(s->link >> 8);
+            }
+            link = s->link;
+        }
+        if (want != st) {
+            if ((want ^ st) & ST_EM) {
+                *o++ = want & ST_EM ? EM_ON : EM_OFF;
+            }
+            if ((want ^ st) & ST_CODE) {
+                *o++ = want & ST_CODE ? CODE_ON : CODE_OFF;
+            }
+            st = want;
+        }
+        *o++ = s->ch;
+    }
+    if (st & ST_CODE) {
+        *o++ = CODE_OFF;
+    }
+    if (st & ST_EM) {
+        *o++ = EM_OFF;
+    }
+    if (link != NO_LINK) {
+        *o++ = LINK_END;
+    }
+    len = (unsigned)(o - buf);
 }
 
 /* The columns' widths narrowed to fit room, as narrowing the widest that
@@ -483,16 +572,12 @@ static void table(const page* p, const block* b)
 
         if (r == 1 || (wrapped && r > 1)) {
             for (c = 0; c < ncols; c++) {
-                int k;
-
                 if (c) {
                     put('-');
                     put('+');
                     put('-');
                 }
-                for (k = 0; k < widths[c]; k++) {
-                    put('-');
-                }
+                put_run('-', widths[c]);
             }
             put('\n');
         }
@@ -510,9 +595,7 @@ static void table(const page* p, const block* b)
                 int shown = line < nlines[c] ? to[c][line] - from[c][line] : 0;
 
                 if (c) {
-                    while (pad-- > 0) {
-                        put(' ');
-                    }
+                    put_run(' ', pad);
                     put(' ');
                     put('|');
                     put(' ');

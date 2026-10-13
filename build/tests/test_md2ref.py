@@ -555,6 +555,23 @@ class Md2ref(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stdout)
         self.assertIn(b'\x10em\x11 | \x12code\x13\n', b''.join(views(data)))
 
+    def test_a_table_at_the_end_of_a_big_topic(self):
+        # A table's lines are written straight into the topic's markup when
+        # there is room for the most they could be, and else a byte at a
+        # time: as near the end of a topic of nearly 64 KB -- compressed,
+        # so not too big -- where it comes out the same as anywhere else.
+        table = ('| Head | `code` |\n|---|---|\n| *em* [lnk](#small) | plain text |\n'
+                 '| `c1` and *e1* | [x](#small) y |\n')
+        body = filler('big', 780)                   # the topic 65520 bytes: the table's last lines past where the most fits
+        p, data, left = compile_pages({'index.md': '# Small\n\n' + table + '\n## Big\n\n' + body
+                                       + table}, '-z')
+        self.assertEqual(p.returncode, 0, p.stdout)
+        v = views(data)
+        laid = v[0][v[0].index(b'\x43\x00\x01'):]          # the small topic's table, from its head
+        laid = laid[:laid.index(b'\n\x00') + 2]              # to its END
+        self.assertGreater(len(v[1]), 65400)
+        self.assertTrue(v[1].endswith(laid), (v[1][-200:], laid))
+
     def test_table_rows_are_ruled_apart_only_when_one_wraps(self):
         # Body rows are ruled apart when any of them wraps: one with a line
         # break in it does, though no wider than its column; one exactly as
