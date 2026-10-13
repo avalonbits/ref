@@ -482,6 +482,17 @@ static void title_word(const char* w, int len, int topic, int arg)
     static char t[WORD_MAX + 1];
 
     (void)arg;
+    /* A word as each_word gives it -- lower case, of a-z, 0-9, _ and $ --
+     * that starts with a letter, _ or $ normalises to itself, with this
+     * document's settings (no skips, no words that hex follows): only one
+     * that starts with a digit can be a number (16, 0x16, 16h, 16_ff), so
+     * only it is normalised, twice -- to say, and as its key. Every title's
+     * every word was, and it was a tenth of the time. */
+    if (w[0] < '0' || w[0] > '9') {
+        put_key(w, len);
+
+        return;
+    }
     if (is_number_word(w, len)) {
         return;                             /* 0x16 is not a word: it would be vdu 22 */
     }

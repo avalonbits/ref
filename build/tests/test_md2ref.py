@@ -171,6 +171,22 @@ class Md2ref(unittest.TestCase):
         got = [g.split()[0] for g in ask(data, 'search', words).splitlines()]
         self.assertEqual(got, ['1'] * 4 + ['0'] + ['1'] * 10)
 
+    def test_title_words_that_are_numbers_are_no_keys(self):
+        # Each word of a title is a key, but one that is a number -- 0x16,
+        # 16h, 16_ff, 36_zz -- which would be a VDU sequence. Only a word that
+        # starts with a digit can be: 2nd and 9lives are keys, as are _priv
+        # and x86, which are taken as they are.
+        page = ('# Doc\n\n## Mode 0x16 setup\n\ntext\n\n## Port 16h and 2nd go\n\ntext\n\n'
+                '## Item 16_ff 36_zz 9lives\n\ntext\n\n## Uses x86 _priv Caps\n\ntext\n')
+        p, data, left = compile_pages({'index.md': page})
+        self.assertEqual(p.returncode, 0, p.stdout)
+        got = ask(data, 'lookup', ['2nd', '9lives', '_priv', 'x86', 'caps', '0x16', '16h', '16_ff',
+                                   '36_zz']).splitlines()
+        self.assertEqual([g.split(' |')[0] for g in got],
+                         ['1 1 2', '1 1 3', '1 1 4', '1 1 4', '1 1 4'] + ['0 0'] * 4)
+        # doc mode setup port 2nd go item 9lives uses x86 _priv caps: not the four numbers.
+        self.assertIn('keys 12\n', ask(data, 'info'))
+
     def test_body_words_are_searched(self):
         # With -f. One hit each: topic, query words in its title, query words matched.
         got = ask(compile_doc('-f', 'doc'), 'search', ['frobs', 'converts']).splitlines()
@@ -531,6 +547,13 @@ class Md2ref(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stdout)
         self.assertIn(b'x*y z\x0bw v[Image: pic] u \x10em\x11 s \x10st\x11 r\x12c\x13 q',
                       b''.join(views(data)))
+
+    def test_a_cells_styles_are_kept(self):
+        # A cell's emphasis and code, kept with each character as the cell is
+        # laid out, come out as they went in: em as em, code as code.
+        p, data, left = compile_pages({'index.md': '# T\n\n| A | B |\n|---|---|\n| *em* | `code` |\n'})
+        self.assertEqual(p.returncode, 0, p.stdout)
+        self.assertIn(b'\x10em\x11 | \x12code\x13\n', b''.join(views(data)))
 
     def test_table_columns_narrowed_as_before(self):
         # Columns too wide for the screen are narrowed as narrowing the

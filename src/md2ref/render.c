@@ -146,16 +146,23 @@ static void put_ascii(const char* s)
 
 /* --- tables ------------------------------------------------------------------------ */
 
+/* A cell's character, and its style and link: four bytes, and a cell
+ * eight, so that a subscript of either is a shift -- at five and six
+ * bytes, each was a call to multiply, and laying out agon-docs' tables
+ * made a hundred thousand of them. */
+#define ST_EM   1
+#define ST_CODE 2
+
 typedef struct {
     uint8_t ch;
-    uint8_t em;
-    uint8_t code;
+    uint8_t style;          /* ST_EM, ST_CODE */
     uint16_t link;
 } styled;
 
 typedef struct {
     styled* c;
     int n;
+    uint8_t pad[2];
 } cell;
 
 /* A cell's inline Markdown as styled characters. */
@@ -203,8 +210,7 @@ static cell styled_cell(const page* p, int no, const char* s, int slen)
             styled* c = &out.c[out.n++];
 
             c->ch = (uint8_t)(b == BREAK ? '\n' : b);
-            c->em = (uint8_t)em;
-            c->code = (uint8_t)code;
+            c->style = (uint8_t)((em ? ST_EM : 0) | (code ? ST_CODE : 0));
             c->link = link;
         }
     }
@@ -248,7 +254,7 @@ static int widest_line(const cell* c)
 
 /* A cell wrapped to width: where each line starts and ends, into from/to;
  * how many lines. Breaks at spaces; a word wider than the column is cut. */
-static int wrap_cell(const cell* c, int width, int* from, int* to, int max)
+static int wrap_cell(const cell* c, int width, uint16_t* from, uint16_t* to, int max)
 {
     int lines = 0;
     int k = 0;
@@ -270,8 +276,8 @@ static int wrap_cell(const cell* c, int width, int* from, int* to, int max)
         if (j < c->n && c->c[j].ch != '\n' && c->c[j].ch != ' ' && last_space > start) {
             j = last_space;                 /* break at the last space */
         }
-        from[lines] = start;
-        to[lines] = j;
+        from[lines] = (uint16_t)start;
+        to[lines] = (uint16_t)j;
         while (to[lines] > from[lines] && c->c[to[lines] - 1].ch == ' ') {
             to[lines]--;
         }
@@ -295,7 +301,8 @@ static void emit_styled(const cell* c, int from, int to, int force_em)
 
     for (k = from; k < to; k++) {
         const styled* s = &c->c[k];
-        int e = s->em || force_em;
+        int e = (s->style & ST_EM) || force_em;
+        int sc = (s->style & ST_CODE) != 0;
 
         if (s->link != link) {
             if (code) {
@@ -325,9 +332,9 @@ static void emit_styled(const cell* c, int from, int to, int force_em)
             put(e ? EM_ON : EM_OFF);
             em = e;
         }
-        if (s->code != code) {
-            put(s->code ? CODE_ON : CODE_OFF);
-            code = s->code;
+        if (sc != code) {
+            put(sc ? CODE_ON : CODE_OFF);
+            code = sc;
         }
         put(s->ch);
     }
@@ -409,13 +416,14 @@ static void table(const page* p, const block* b)
     static int natural[MAX_COLS];
     static int minimum[MAX_COLS];
     static int widths[MAX_COLS];
-    static int from[MAX_COLS][64];
-    static int to[MAX_COLS][64];
+    static uint16_t from[MAX_COLS][64];     /* 128 bytes a column: a shift */
+    static uint16_t to[MAX_COLS][64];
     static int nlines[MAX_COLS];
     const char* s = b->text;
     int nrows = 0;
     int ncols = 0;
     cell* grid;
+    cell* row;
     int r;
     int c;
     int wrapped = 0;
@@ -426,13 +434,13 @@ static void table(const page* p, const block* b)
     /* As many columns as the first row has. */
     ncols = split_row(s, (int)(strchr(s, '\n') - s), cells, lens, MAX_COLS);
     grid = source_alloc((unsigned)(nrows * ncols + 1) * sizeof(cell));
-    for (r = 0; r < nrows; r++) {
+    for (r = 0, row = grid; r < nrows; r++, row += ncols) {     /* a row at a time: no multiply */
         const char* e = strchr(s, '\n');
         int n = split_row(s, (int)(e - s), cells, lens, MAX_COLS);
 
         for (c = 0; c < ncols; c++) {
-            grid[r * ncols + c] = c < n ? styled_cell(p, b->no + (r ? r + 1 : 0), cells[c], lens[c])
-                                           : styled_cell(p, b->no, "", 0);
+            row[c] = c < n ? styled_cell(p, b->no + (r ? r + 1 : 0), cells[c], lens[c])
+                           : styled_cell(p, b->no, "", 0);
         }
         s = e + 1;
     }
@@ -443,9 +451,9 @@ static void table(const page* p, const block* b)
         int longest = 1;
 
         natural[c] = 1;
-        for (r = 0; r < nrows; r++) {
-            int w = widest_line(&grid[r * ncols + c]);
-            int lw = longest_word(&grid[r * ncols + c]);
+        for (r = 0, row = grid; r < nrows; r++, row += ncols) {
+            int w = widest_line(&row[c]);
+            int lw = longest_word(&row[c]);
 
             if (w > natural[c]) {
                 natural[c] = w;
@@ -466,15 +474,15 @@ static void table(const page* p, const block* b)
     fit_widths(widths, minimum, ncols, TABLE_WIDTH - 3 * (ncols - 1));
 
     /* Any body row wrapped? Then rows are ruled apart. */
-    for (r = 1; r < nrows; r++) {
+    for (r = 1, row = grid + ncols; r < nrows; r++, row += ncols) {
         for (c = 0; c < ncols; c++) {
-            if (wrap_cell(&grid[r * ncols + c], widths[c], from[c], to[c], 64) > 1) {
+            if (wrap_cell(&row[c], widths[c], from[c], to[c], 64) > 1) {
                 wrapped = 1;
             }
         }
     }
 
-    for (r = 0; r < nrows; r++) {
+    for (r = 0, row = grid; r < nrows; r++, row += ncols) {
         int height = 1;
         int line;
 
@@ -494,7 +502,7 @@ static void table(const page* p, const block* b)
             put('\n');
         }
         for (c = 0; c < ncols; c++) {
-            nlines[c] = wrap_cell(&grid[r * ncols + c], widths[c], from[c], to[c], 64);
+            nlines[c] = wrap_cell(&row[c], widths[c], from[c], to[c], 64);
             if (nlines[c] > height) {
                 height = nlines[c];
             }
@@ -515,7 +523,7 @@ static void table(const page* p, const block* b)
                     put(' ');
                 }
                 if (line < nlines[c]) {
-                    emit_styled(&grid[r * ncols + c], from[c][line], to[c][line], r == 0);
+                    emit_styled(&row[c], from[c][line], to[c][line], r == 0);
                 }
                 pad = widths[c] - shown;
             }

@@ -11,11 +11,14 @@
 #define TOKENS 32
 #define POOL   (2 * (REF_KEY_MAX + 1))
 
+/* Eight bytes, so that tok[k] is a shift: at five, every one was a call
+ * to multiply on the eZ80, which md2ref makes for every key it normalises. */
 typedef struct {
     uint16_t at;            /* into the pool */
     uint8_t len;
     uint8_t wide;
     uint8_t num;
+    uint8_t pad[3];
 } token;
 
 /* Statics, not locals: agondev frames stay small. One normalisation at a
