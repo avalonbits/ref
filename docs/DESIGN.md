@@ -9,15 +9,14 @@ portable **reader core** that knows it. **md2ref**, in portable C, writes
 the format from any Markdown, on the Agon or a PC, so a program can ship
 its own documentation. Any other tool can write the format too.
 
-    agon-docs (Markdown, at the commit in SOURCE)
-        |
-        |  build/refbuild      parse, split into topics, resolve links,
-        v                      extract keys, render, compress, index
-    mos.dat (about 470 KB)
-        |
-        |  src/core            open, decompress, look up, search, lay out
-        v
-    src/viewer -> the screen
+```mermaid
+flowchart TD
+    src["agon-docs<br>(Markdown, at the commit in SOURCE)"]
+    dat["mos.dat<br>(about 470 KB)"]
+    screen["src/viewer → the screen"]
+    src -- "build/refbuild: parse, split into topics, resolve links,<br>extract keys, render, compress, index" --> dat
+    dat -- "src/core: open, decompress, look up, search, lay out" --> screen
+```
 
 The Agon has 512 KB and the wiki is 700 KB of text, so nothing is loaded
 whole: a document is read a topic, a key block or a word block at a time.
