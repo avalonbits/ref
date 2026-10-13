@@ -20,7 +20,6 @@
 
 #define HISTORY   32
 #define HSTEP     8                 /* columns code and tables scroll sideways */
-#define FIND_MAX  40
 
 #define lines  doc_lines
 #define nlines doc_nlines
@@ -32,7 +31,6 @@ static int cl;                      /* the cursor: its line */
 static int cc;                      /* and its column, as on the screen */
 static int want;                    /* the column Up and Down keep to */
 
-static char ftext[FIND_MAX + 1];    /* the last thing found, kept between topics */
 static int mline = -1;              /* its match: the line, or -1 */
 static int mcol;                    /* and where on it, in characters */
 
@@ -279,7 +277,7 @@ static void draw_line(int row, int idx)
             skip--;
             continue;
         }
-        found = idx == mline && here >= mcol && here < mcol + (int)strlen(ftext);
+        found = idx == mline && here >= mcol && here < mcol + (int)strlen(ui_find_text);
         scr_colour(role_of(ln, lit, found, link, style));
         scr_add((int)c);
         col++;
@@ -525,7 +523,7 @@ static int back_to_view(void)
 
 /* --- finding on the screen ------------------------------------------------------- */
 
-/* Find ftext, forward (dir 1) or back, from its last match -- or, the
+/* Find ui_find_text, forward (dir 1) or back, from its last match -- or, the
  * first time, from the top of the screen -- and show the match, or say it
  * is not there until a key. */
 static void find(int dir)
@@ -545,68 +543,28 @@ static void find(int dir)
         line = top + scr_rows - 1 < nlines ? top + scr_rows - 1 : nlines - 1;
         from = 0x7fff;
     }
-    if (doc_find(ftext, dir, line, from, &at_line, &at)) {
+    if (doc_find(ui_find_text, dir, line, from, &at_line, &at)) {
         mline = at_line;
         mcol = at;
         if (mline < top || mline >= top + scr_rows) {
             scroll_to(mline - scr_rows / 2);
         }
         cursor_jump(mline, lines[mline].x + mcol);
-        LOG("find '%s' at %d:%d", ftext, mline, mcol);
+        LOG("find '%s' at %d:%d", ui_find_text, mline, mcol);
 
         return;
     }
     mline = -1;
-    scr_begin(scr_rows);
-    scr_colour(C_STATUS);
-    scr_adds(" Not found: ");
-    scr_adds(ftext);
-    scr_end();
-    LOG("find '%s' not found", ftext);
-    in_wait();
+    ui_not_found();
 }
 
-/* CTRL+F: a prompt on the bottom row holding the last search, as aed's.
- * Enter finds; Esc, or Enter with nothing typed, cancels. Spaces can be
- * typed: a search may be several words. */
+/* CTRL+F: the prompt (help.c), then the first match from the top of the
+ * screen. */
 static void find_prompt(void)
 {
-    static char text[FIND_MAX + 1];
-
-    strcpy(text, ftext);
-    for (;;) {
-        key k;
-        int m;
-        int len = (int)strlen(text);
-
-        scr_begin(scr_rows);
-        scr_colour(C_STATUS);
-        scr_adds(" Find: ");
-        scr_adds(text);
-        scr_end();
-        scr_cursor(7 + len, scr_rows, 1);
-        k = in_wait();
-        m = in_meaning(k);
-        if (m == K_ESC || (m == K_ENTER && len == 0)) {
-            scr_cursor(0, 0, 0);
-
-            return;
-        }
-        if (m == K_ENTER) {
-            scr_cursor(0, 0, 0);
-            strcpy(ftext, text);
-            mline = -1;
-            find(1);
-
-            return;
-        }
-        if (m == K_BACK && len > 0) {
-            text[len - 1] = 0;
-        } else if ((m == K_CHAR || k.ch == ' ') && k.ch >= 0x20 && k.ch < 0x7f
-                   && len < FIND_MAX) {
-            text[len] = (char)k.ch;
-            text[len + 1] = 0;
-        }
+    if (ui_find_prompt()) {
+        mline = -1;
+        find(1);
     }
 }
 
@@ -743,7 +701,7 @@ int view_loop(void)
                 break;
             case K_FIND_NEXT:
             case K_FIND_PREV:
-                if (ftext[0]) {
+                if (ui_find_text[0]) {
                     find(m == K_FIND_NEXT ? 1 : -1);
                 }
                 break;

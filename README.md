@@ -97,7 +97,9 @@ heading under it is lit; anywhere else the text cursor shows where it is.
 | Esc, `q` | quit |
 
 In the contents, the arrows move, Right and Left open and close a section,
-and Enter opens a topic.
+and Enter opens a topic. Ctrl+F finds words in the titles there too,
+opening the section a match is in; Ctrl+N and Ctrl+P go to the next and
+the one before.
 
 ref uses the screen mode and font already in use; under hub, the prompt's.
 

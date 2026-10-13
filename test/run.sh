@@ -329,6 +329,43 @@ check "a lookup that finds no key searches the text instead" \
       "$(dump "$t" results | tail -1 | sed 's/ *$//')" " Search: transparency"
 check "  and lists what it found" "$(dump "$t" results | sed '$d' | grep -c '^ [A-Z]')" 3
 
+# --- finding in the contents, with CTRL ---
+t=$(scripted "ref mos" "ctrl+f
+text:SPRITE
+enter
+dump:tocfound
+ctrl+n
+ctrl+p
+enter
+dump:tocopened
+c:t
+ctrl+f
+back
+back
+back
+back
+back
+back
+text:zzzz
+enter
+dump:tocnotfound")
+check "Ctrl+F in the contents finds a title, ignoring case, in a section shut" \
+      "$(grep -m1 "^find 'SPRITE' in the contents" <<< "$t")" "find 'SPRITE' in the contents at node 368"
+check "  the section opened, the cursor on it" \
+      "$(dump "$t" tocfound | grep -c 'Bitmap and sprite commands')" 1
+check "  Ctrl+N goes to the next, Ctrl+P back" \
+      "$(grep -o "in the contents at node [0-9]*" <<< "$t" | sed -n '2,3p' | tr '\n' ' ')" \
+      "in the contents at node 499 in the contents at node 368 "
+check "  Enter opens it" "$(dump "$t" tocopened | head -1 | sed 's/ *$//')" \
+      "VDU 23, 27, <command>, [<arguments>]: Bitmap and sprite commands"
+check "  and a word that is not there says so" "$(dump "$t" tocnotfound | grep -c '^ Not found: zzzz$')" 1
+t2=$(scripted "ref mos" "ctrl+f
+text:sprite
+enter
+enter
+ctrl+n")
+check "  a topic's Ctrl+N finds what the contents last found" "$(grep -c "^find 'sprite' at " <<< "$t2")" 1
+
 # --- the contents, and find as you type ---
 t=$(scripted "ref mos" "dump:contents
 down

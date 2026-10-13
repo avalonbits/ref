@@ -1,6 +1,8 @@
 /*
  * The help screen, and a message that waits for a key.
  */
+#include <string.h>
+
 #include "script.h"
 #include "ui.h"
 
@@ -13,7 +15,7 @@ static const char* const HELP[] = {
     "  Ctrl+Up  Ctrl+Down           to the previous or next heading",
     "  Ctrl+Left  Ctrl+Right        to the previous or next link (Tab too)",
     "  Enter                        follow the link under it",
-    "  Ctrl+F                       find words on the screen and on",
+    "  Ctrl+F                       find words, here or in the contents",
     "  Ctrl+N  Ctrl+P               the next or previous match",
     "  Backspace  Alt+Left          back: to the link you followed, or to",
     "                               the contents, list or find it came from",
@@ -57,6 +59,60 @@ void ui_help(void)
     }
     press_a_key();
     SCRIPTED(scr_dump("help"));
+    in_wait();
+}
+
+char ui_find_text[UI_FIND_MAX + 1];
+
+/* As aed's: Enter finds; Esc, or Enter with nothing typed, cancels. Spaces
+ * can be typed: a search may be several words. */
+int ui_find_prompt(void)
+{
+    static char text[UI_FIND_MAX + 1];
+
+    strcpy(text, ui_find_text);
+    for (;;) {
+        key k;
+        int m;
+        int len = (int)strlen(text);
+
+        scr_begin(scr_rows);
+        scr_colour(C_STATUS);
+        scr_adds(" Find: ");
+        scr_adds(text);
+        scr_end();
+        scr_cursor(7 + len, scr_rows, 1);
+        k = in_wait();
+        m = in_meaning(k);
+        if (m == K_ESC || (m == K_ENTER && len == 0)) {
+            scr_cursor(0, 0, 0);
+
+            return 0;
+        }
+        if (m == K_ENTER) {
+            scr_cursor(0, 0, 0);
+            strcpy(ui_find_text, text);
+
+            return 1;
+        }
+        if (m == K_BACK && len > 0) {
+            text[len - 1] = 0;
+        } else if ((m == K_CHAR || k.ch == ' ') && k.ch >= 0x20 && k.ch < 0x7f
+                   && len < UI_FIND_MAX) {
+            text[len] = (char)k.ch;
+            text[len + 1] = 0;
+        }
+    }
+}
+
+void ui_not_found(void)
+{
+    scr_begin(scr_rows);
+    scr_colour(C_STATUS);
+    scr_adds(" Not found: ");
+    scr_adds(ui_find_text);
+    scr_end();
+    LOG("find '%s' not found", ui_find_text);
     in_wait();
 }
 

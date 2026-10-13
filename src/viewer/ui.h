@@ -202,6 +202,15 @@ int pick_again(void);
 void ui_help(void);
 void ui_message(const char* text);      /* until a key */
 
+/* Finding words: in a topic (view.c) and in the contents (toc.c), the
+ * last thing found kept for both. CTRL+F's prompt on the bottom row,
+ * holding the last search: 1 when Enter took a new one into
+ * ui_find_text, 0 when it was cancelled. And "Not found", until a key. */
+#define UI_FIND_MAX 40
+extern char ui_find_text[UI_FIND_MAX + 1];
+int ui_find_prompt(void);
+void ui_not_found(void);
+
 /* --- without the screen ---------------------------------------------------------- */
 
 /* Text to the console, a newline as CR LF. */

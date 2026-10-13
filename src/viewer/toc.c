@@ -2,6 +2,8 @@
  * The contents: the nav's sections, their pages and the headings under
  * them, as a tree that opens and closes. Enter on a topic opens it; Esc
  * goes back to the topic it was opened from, or quits if there is none.
+ * CTRL+F finds words in the titles, closed sections' too, as a topic
+ * finds them in its text; CTRL+N and CTRL+P the next and the one before.
  */
 #include <stdlib.h>
 #include <string.h>
@@ -134,6 +136,71 @@ static void reveal(int topic)
     rebuild();
 }
 
+/* --- finding ------------------------------------------------------------------- */
+
+static int lower(int c)
+{
+    return c >= 'A' && c <= 'Z' ? c + 32 : c;
+}
+
+/* Whether node k's title has the text, ignoring case. */
+static int has_text(unsigned k, const char* want, unsigned wl)
+{
+    const char* t = ui_title_at(nodes[k].title);
+    unsigned n = (unsigned)strlen(t);
+    unsigned x;
+
+    for (x = 0; x + wl <= n; x++) {
+        unsigned j;
+
+        for (j = 0; j < wl && lower((unsigned char)t[x + j]) == want[j]; j++) {
+        }
+        if (j == wl) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+/* ui_find_text in the titles, in the contents' order, all round: from the
+ * cursor's node itself (dir 0, a new search), or from the one after (1)
+ * or before (-1). The first found is shown -- the sections it is in
+ * opened -- with the cursor on it: 1. Else "Not found", and 0. */
+static int find(int dir)
+{
+    static char want[UI_FIND_MAX + 1];
+    unsigned wl = (unsigned)strlen(ui_find_text);
+    unsigned n = book.nnodes;
+    unsigned from = nrows ? rows[cursor] : 0;
+    unsigned i;
+    unsigned j;
+
+    for (j = 0; j <= wl; j++) {
+        want[j] = (char)lower((unsigned char)ui_find_text[j]);
+    }
+    for (i = 0; wl && i < n; i++) {
+        unsigned step = dir == 0 ? i : i + 1;
+        unsigned k = dir < 0 ? (from + n - step % n) % n : (from + step) % n;
+
+        if (has_text(k, want, wl)) {
+            unsigned p;
+
+            for (p = nodes[k].parent; p != REF_NONE; p = nodes[p].parent) {
+                nodes[p].open = 1;
+            }
+            rebuild();
+            cursor = row_of(k);
+            LOG("find '%s' in the contents at node %u", ui_find_text, k);
+
+            return 1;
+        }
+    }
+    ui_not_found();
+
+    return 0;
+}
+
 static void keep_visible(void)
 {
     if (cursor < 0) {
@@ -190,7 +257,7 @@ static void draw(void)
     }
     scr_begin(scr_rows);
     scr_colour(C_STATUS);
-    scr_adds(" Contents   Enter: open   Right/Left: show/hide   Esc: back");
+    scr_adds(" Contents   Enter: open   Right/Left: show/hide   Ctrl+F: find   Esc: back");
     scr_end();
     log_state();
 }
@@ -297,6 +364,19 @@ int toc_loop(int topic)
             break;
         case K_FIND:
             return TOC_FIND;
+        case K_FIND_HERE:
+            if (ui_find_prompt()) {
+                find(0);
+            }
+            shape = 1;                      /* the prompt, or what was found */
+            break;
+        case K_FIND_NEXT:
+        case K_FIND_PREV:
+            if (ui_find_text[0]) {
+                find(m == K_FIND_NEXT ? 1 : -1);
+                shape = 1;
+            }
+            break;
         case K_ESC:
             return TOC_BACK;
         case K_CHAR:
