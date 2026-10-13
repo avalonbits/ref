@@ -699,6 +699,61 @@ class Md2ref(unittest.TestCase):
         self.assertEqual(text.count(b'\x14'), 300)
         self.assertNotIn(b'\x14\xff\xff', text)
 
+    NAV = ('site_name: "Agon C: a reference"\n'
+           'nav:\n'
+           '  - Start: index.md\n'
+           '  # a comment\n'
+           '  - Input and output:\n'
+           '      - stdio.md\n'
+           "      - 'Wide: characters': wchar.md\n"
+           '  - Strings:\n'
+           '      - string.md\n'
+           'theme: readthedocs\n')
+    NAV_PAGES = {
+        'index.md': '# Welcome\n\nSee [fopen](stdio.md#fopen).\n',
+        'stdio.md': '# `stdio.h`\n\nStreams.\n\n## fopen\n\nOpens. Also [strlen](string.md#strlen).\n',
+        'wchar.md': 'Wide text, no heading.\n',
+        'string.md': '# `string.h`\n\n## strlen\n\nLength. Back to [fopen](stdio.md#fopen).\n',
+        'extra.md': '# Extra\n\nNot in the nav.\n',
+    }
+
+    def test_a_nav_makes_sections_that_open_no_topic(self):
+        # An mkdocs.yml beside the pages gives the contents as MkDocs and
+        # ref's builder read its nav: sections that open no topic, with the
+        # pages under them, in the nav's order; a page titled by the nav
+        # where the nav titles it (its node, and its top when it has no
+        # heading of its own); the pages the nav leaves out last, in a
+        # section of their own; and site_name the document's title. Links
+        # between pages still name a page by its file, across sections.
+        p, data, left = compile_pages(dict(self.NAV_PAGES, **{'mkdocs.yml': self.NAV}))
+        self.assertEqual(p.returncode, 0, p.stdout)
+        self.assertEqual([c.rstrip() for c in ask(data, 'contents').splitlines()],
+                         ['Start  [0]', 'Input and output', '  stdio.h  [1]', '    fopen  [2]',
+                          '  Wide: characters  [3]', 'Strings', '  string.h  [4]', '    strlen  [5]',
+                          'Pages outside the menu', '  Extra  [6]'])
+        self.assertIn('title Agon C: a reference\n', ask(data, 'info'))
+        self.assertIn('nodes 10\n', ask(data, 'info'))
+        v = views(data)
+        self.assertIn(b'See ' + link(2) + b'fopen', v[0])
+        self.assertIn(b'Also ' + link(5) + b'strlen', v[1])
+        self.assertIn(b'Back to ' + link(2) + b'fopen', v[4])
+        self.assertTrue(v[3].startswith(b'B\x01\x00Wide: characters\x00'), v[3][:30])
+
+    def test_a_title_given_is_the_title_over_site_name(self):
+        p, data, left = compile_pages(dict(self.NAV_PAGES, **{'mkdocs.yml': self.NAV}), '-t', 'Given')
+        self.assertEqual(p.returncode, 0, p.stdout)
+        self.assertIn('title Given\n', ask(data, 'info'))
+
+    def test_a_nav_it_cannot_read_is_an_error(self):
+        for yml, said in [('nav:\n  - stdio.md\n  -stdio.md\n', 'mkdocs.yml:3: error: nav: cannot read this line'),
+                          ('site_name: x\n', 'mkdocs.yml: error: has no nav'),
+                          ('nav:\n  - stdio.md\n  - missing.md\n', 'missing.md: error: cannot be read')]:
+            with self.subTest(yml=yml):
+                p, data, left = compile_pages({'stdio.md': '# S\n', 'mkdocs.yml': yml})
+                self.assertEqual(p.returncode, FAILED, p.stdout)
+                self.assertIn(said, p.stdout + p.stderr)
+                self.assertIsNone(data)
+
     def test_words_past_the_dictionary(self):
         # More different words than the dictionary has room for: those found
         # once it is full are kept as words, sorted on the card, and woven in

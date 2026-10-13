@@ -67,9 +67,23 @@ page = ('# Edge  Cases\n\n'
 open(sys.argv[1], 'w').write(page)
 PY
 cp "$SCRATCH/edge/index.md" "$sd/edge/"
+# And a directory with an mkdocs.yml: its nav's sections, which open no
+# topic, the pages under them, and links between them.
+mkdir -p "$SCRATCH/nav" "$sd/nav"
+printf '%s\n' 'site_name: "Agon C: a reference"' 'nav:' '  - Start: index.md' '  - Input and output:' \
+    '      - stdio.md' "      - 'Wide: characters': wchar.md" '  - Strings:' '      - string.md' \
+    > "$SCRATCH/nav/mkdocs.yml"
+printf '# Welcome\n\nSee [fopen](stdio.md#fopen).\n' > "$SCRATCH/nav/index.md"
+printf '# `stdio.h`\n\n## fopen\n\nOpens. Also [strlen](string.md#strlen).\n' > "$SCRATCH/nav/stdio.md"
+printf 'Wide text, no heading.\n' > "$SCRATCH/nav/wchar.md"
+printf '# `string.h`\n\n## strlen\n\nLength.\n' > "$SCRATCH/nav/string.md"
+printf '# Extra\n' > "$SCRATCH/nav/extra.md"
+cp "$SCRATCH"/nav/* "$sd/nav/"
+"$ROOT/out/host/md2ref" -o "$SCRATCH/nav.dat" "$SCRATCH/nav" > /dev/null
 "$ROOT/out/host/md2ref" -w -o "$SCRATCH/edge.dat" "$SCRATCH/edge" > /dev/null
 "$ROOT/out/host/md2ref" -w -f -o "$SCRATCH/edge_f.dat" "$SCRATCH/edge" > /dev/null
-printf '%s\r\n' 'md2ref -w -o /edge.dat /edge' 'md2ref -w -f -o /edge_f.dat /edge' >> "$sd/autoexec.txt"
+printf '%s\r\n' 'md2ref -w -o /edge.dat /edge' 'md2ref -w -f -o /edge_f.dat /edge' 'md2ref -o /nav.dat /nav' \
+    >> "$sd/autoexec.txt"
 if [ -n "$BIG" ]; then
     mkdir -p "$sd/big" "$SCRATCH/big"
     cp "$BIG"/*.md "$BIG"/*/*.md "$sd/big/"
@@ -96,6 +110,8 @@ check "  an error goes in the file as on the console" \
 check "md2ref on the Agon: text copied as on the PC, its words with it" \
       "$(md5sum < "$sd/edge.dat" 2>/dev/null) $(md5sum < "$sd/edge_f.dat" 2>/dev/null)" \
       "$(md5sum < "$SCRATCH/edge.dat") $(md5sum < "$SCRATCH/edge_f.dat")"
+check "md2ref on the Agon: an mkdocs.yml's nav, as on the PC" \
+      "$(md5sum < "$sd/nav.dat" 2>/dev/null)" "$(md5sum < "$SCRATCH/nav.dat")"
 check "ref finds a topic in it by a code span" \
       "$(grep -c '^strtol, strtoul, strtoll$' <<< "$console")" 1
 if [ -n "$BIG" ]; then

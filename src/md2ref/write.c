@@ -435,13 +435,20 @@ static unsigned add_title(const char* s)
     return k;
 }
 
+/* The nav's items' titles, in the pool, by item: for the contents. */
+static unsigned* nav_title_at;
+
 static void make_titles(void)
 {
     unsigned size = 256 + (unsigned)strlen(book_title);
     int t;
+    int k;
 
     for (t = 0; t < ntopics; t++) {
         size += 1 + (unsigned)strlen(TOPIC(t).title);
+    }
+    for (k = 0; k < nav_count; k++) {
+        size += 1 + (unsigned)strlen(nav[k].title);
     }
     pool = arena_alloc(size);
     title_at = arena_alloc((unsigned)ntopics * sizeof(unsigned));
@@ -453,8 +460,98 @@ static void make_titles(void)
         title_at[t] = add_title(TOPIC(t).title);
     }
     book_title_at = add_title(book_title);
+    if (nav_first >= 0) {
+        nav_title_at = arena_alloc((unsigned)(nav_count + 1) * sizeof(unsigned));
+        for (k = 0; k < nav_count; k++) {
+            nav_title_at[k] = nav[k].title[0] ? add_title(nav[k].title) : 0;
+        }
+    }
     free(title_slot);
     title_slot = NULL;
+}
+
+/* --- the contents, from the nav ------------------------------------------------ */
+
+/* With a nav, the contents are its sections, which open no topic, and its
+ * pages, each with its topics under it: nodes in preorder, made here as
+ * the builder makes them. Without one, a node for each topic, as before. */
+typedef struct {
+    unsigned title;
+    uint16_t topic;
+    uint16_t child;
+    uint16_t next;
+    uint8_t pad;
+} node;
+
+static node* nodes;
+static unsigned nnodes;
+
+/* Topic t and those under it, as nodes: the first's index. */
+static unsigned topic_nodes(int t)
+{
+    unsigned at = nnodes++;
+    unsigned prev = NONE;
+    int c;
+
+    nodes[at].title = title_at[t];
+    nodes[at].topic = (uint16_t)t;
+    nodes[at].child = NONE;
+    nodes[at].next = NONE;
+    for (c = TOPIC(t).first_child; c >= 0; c = TOPIC(c).next) {
+        unsigned ci = topic_nodes(c);
+
+        if (prev == NONE) {
+            nodes[at].child = (uint16_t)ci;
+        } else {
+            nodes[prev].next = (uint16_t)ci;
+        }
+        prev = ci;
+    }
+
+    return at;
+}
+
+/* Items from k on, as nodes: the first's index, NONE for none. A page is
+ * its top topic, titled by the nav when the nav titles it. */
+static unsigned item_nodes(int k)
+{
+    unsigned first = NONE;
+    unsigned prev = NONE;
+
+    for (; k >= 0; k = nav[k].next) {
+        unsigned at;
+
+        if (nav[k].page >= 0) {
+            int top = pages[nav[k].page].first_topic;
+
+            at = topic_nodes(top);
+            if (nav[k].title[0]) {
+                nodes[at].title = nav_title_at[k];
+            }
+        } else {
+            at = nnodes++;
+            nodes[at].title = nav_title_at[k];
+            nodes[at].topic = NONE;
+            nodes[at].next = NONE;
+            nodes[at].child = NONE;
+            nodes[at].child = (uint16_t)item_nodes(nav[k].child);
+        }
+        if (first == NONE) {
+            first = at;
+        } else {
+            nodes[prev].next = (uint16_t)at;
+        }
+        prev = at;
+    }
+
+    return first;
+}
+
+static void make_nodes(void)
+{
+    nodes = md_realloc(NULL, (unsigned)(ntopics + nav_count + 1) * (unsigned)sizeof(node));
+    nnodes = 0;
+    item_nodes(nav_first);
 }
 
 /* --- the document -------------------------------------------------------------- */
@@ -491,11 +588,16 @@ int write_book(const char* path)
     int t;
 
     make_titles();
+    if (nav_first >= 0) {
+        make_nodes();
+    } else {
+        nnodes = (unsigned)ntopics;
+    }
     if (reread(&text_file) != 0 || open_file(&doc, path, "", "wb") != 0) {
         return -1;
     }
     o_nodes = HEAD_SIZE;
-    o_topics = o_nodes + 10UL * (unsigned long)ntopics;
+    o_topics = o_nodes + 10UL * (unsigned long)nnodes;
     o_titles = o_topics + 16UL * (unsigned long)ntopics;
     o_text = o_titles + pool_len;
     o_keys = o_text + text_file.size;
@@ -503,11 +605,24 @@ int write_book(const char* path)
     o_words = o_keydir + keys_section.dir_len;
 
     put(&doc, head, HEAD_SIZE);             /* for now */
-    for (t = 0; t < ntopics; t++) {
-        u32(title_at[t]);
-        u16((unsigned)t);
-        u16(TOPIC(t).first_child >= 0 ? (unsigned)TOPIC(t).first_child : NONE);
-        u16(TOPIC(t).next >= 0 ? (unsigned)TOPIC(t).next : NONE);
+    if (nodes) {
+        unsigned k;
+
+        for (k = 0; k < nnodes; k++) {
+            u32(nodes[k].title);
+            u16(nodes[k].topic);
+            u16(nodes[k].child);
+            u16(nodes[k].next);
+        }
+        free(nodes);
+        nodes = NULL;
+    } else {
+        for (t = 0; t < ntopics; t++) {
+            u32(title_at[t]);
+            u16((unsigned)t);
+            u16(TOPIC(t).first_child >= 0 ? (unsigned)TOPIC(t).first_child : NONE);
+            u16(TOPIC(t).next >= 0 ? (unsigned)TOPIC(t).next : NONE);
+        }
     }
     for (t = 0; t < ntopics; t++) {
         u32(title_at[t]);
@@ -538,7 +653,7 @@ int write_book(const char* path)
     put16(head + 10, book_title[0] ? 1 : 0);
     memcpy(head + 12, "md2ref", 6);
     put16(head + 36, (unsigned)ntopics);
-    put16(head + 38, (unsigned)ntopics);
+    put16(head + 38, nnodes);
     put16(head + 40, keys_section.blocks);
     put16(head + 42, words_section.blocks);
     put32(head + 44, keys_section.count);

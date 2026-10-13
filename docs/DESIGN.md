@@ -294,7 +294,7 @@ flowchart TD
 
 | Step | Where | What |
 |---|---|---|
-| pages | [`input.c`](../src/md2ref/input.c) | the files given, or a directory's `.md` files, index first; each read through a window a *run* at a time |
+| pages | [`input.c`](../src/md2ref/input.c) | the files given, or a directory's `.md` files, index first -- or its `mkdocs.yml`'s nav's, in its order, its sections becoming contents that open no topic ([`write.c`](../src/md2ref/write.c)'s nodes); each read through a window a *run* at a time |
 | blocks | [`parse.c`](../src/md2ref/parse.c) | a run's lines into blocks: headings, paragraphs, code, lists, quotes, notes, tables, one function each |
 | outline | [`book.c`](../src/md2ref/book.c) | topics from headings as they come, anchors as Python-Markdown makes them, links resolved or left pending |
 | markup | [`render.c`](../src/md2ref/render.c), [`inline.c`](../src/md2ref/inline.c) | each topic in ref's markup, tables laid out, its words taken as it is written, and held until its descendants are read |

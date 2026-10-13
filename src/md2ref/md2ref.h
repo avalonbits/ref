@@ -109,6 +109,7 @@ typedef struct block block;
 typedef struct {
     const char* path;       /* as given */
     const char* name;       /* its file name, as links name it */
+    const char* nav_title;  /* the nav's title for it (mkdocs.yml), or NULL */
     block* blocks;          /* while it is read: the topic's so far */
     int nblocks;
     int first_topic;
@@ -122,8 +123,27 @@ extern page* pages;
 extern int npages;
 
 /* The pages to compile: the files given, or a directory's .md files in
- * name order (index.md or README.md first). 0, or -1. */
+ * name order (index.md or README.md first) -- or, when the directory has
+ * an mkdocs.yml, its nav's pages in the nav's order, and then any others
+ * there. 0, or -1. */
 int read_pages(int nargs, char** args);
+
+/* The nav, from the directory's mkdocs.yml, as MkDocs and ref's builder
+ * read it: sections, which open no topic, and pages, nested. An item is a
+ * page (page >= 0) or a section (page -1, its items from child); items in
+ * order through next, -1 ending them. nav_first is the first, -1 with no
+ * nav; nav_site_name its site_name, or NULL. */
+typedef struct {
+    const char* title;      /* as written, "" for a page it does not title */
+    int page;
+    int child;
+    int next;
+} nav_item;
+
+extern nav_item* nav;
+extern int nav_count;
+extern int nav_first;
+extern const char* nav_site_name;
 /* A directory made, if it is not there already: any failure shows when a
  * file in it cannot be written. */
 void make_dir(const char* path);

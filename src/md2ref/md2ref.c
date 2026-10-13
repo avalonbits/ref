@@ -8,7 +8,8 @@
  *           own, ref-doc made if it is not there; the pages, if none are
  *           given, are the current directory's
  *   -o      the document to write instead, anywhere
- *   -t      its title (else the first page's first heading)
+ *   -t      its title (else mkdocs.yml's site_name, or the first page's
+ *           first heading)
  *   -w      a link that leads nowhere is a warning, not an error
  *   -z      compress each topic's text: a smaller document, but compressing
  *           takes as long as all the rest on the Agon; else each topic is
@@ -21,6 +22,10 @@
  *           when there are none: ade reads it after a build
  *   @list   the pages named in this file, one a line: a build.obey line
  *           is too short for many
+ *
+ * A directory with an mkdocs.yml beside its pages is read by its nav, as
+ * MkDocs and ref's builder read it: its sections are contents that open
+ * no topic, its pages in its order (input.c, write.c).
  *
  * Errors are reported as file:line: error: ..., and md2ref then writes
  * nothing and returns 100 -- as acc and zap do with -e, so an editor can

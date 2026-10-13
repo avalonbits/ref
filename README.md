@@ -135,6 +135,22 @@ ade compiles a program's Markdown, wherever it is, into the program's
   only `#` heading is that topic; otherwise the page is a topic titled
   from its file name, with its headings under it. The document's title is
   the first page's first heading, or `-t`'s.
+- **A menu**: a directory with an `mkdocs.yml` beside its pages is read as
+  MkDocs reads it, and as ref's builder makes mos.dat. Its `nav` gives the
+  contents: sections, which open no topic, and the pages under them, in
+  its order, each titled by the nav where the nav titles it. Pages the nav
+  leaves out come last, under "Pages outside the menu", and `site_name` is
+  the title unless `-t` gives one. Links name a page by its file, in any
+  section:
+
+      site_name: Agon C library
+      nav:
+        - Start: index.md
+        - Input and output:
+            - stdio.md
+            - wchar.md
+        - Strings:
+            - string.md
 - **Keys**: a heading is found by each code span in it, by the VDU
   sequence it names, and by the words of its title. `` ## `strtol`,
   `strtoul` `` makes `ref <doc> strtoul` go straight to it. The search

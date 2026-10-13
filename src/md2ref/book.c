@@ -202,6 +202,13 @@ static char* title_from_name(const char* name)
     return t;
 }
 
+/* A page's top's title, when it is not its heading: the nav's title for
+ * it, as the builder takes it, or else its file name. */
+static char* page_title(int pi)
+{
+    return pages[pi].nav_title ? agon_string(pages[pi].nav_title) : title_from_name(pages[pi].name);
+}
+
 /* The page being read: its open topics, outermost first. */
 static int stack[DEPTH];
 static int depth;
@@ -339,7 +346,7 @@ static int make_top(int pi)
     page_id[0] = NULL;
     npage_id++;
     memset(&TOPIC(f), 0, sizeof(topic));
-    TOPIC(f).title = title_from_name(pages[pi].name);
+    TOPIC(f).title = page_title(pi);
     TOPIC(f).page = (uint8_t)pi;
     TOPIC(f).made = made++;
     keys_topic(TOPIC(f).made, TOPIC(f).title, NULL);
@@ -369,7 +376,7 @@ int book_top(int pi, const block* first)
 
         return -1;
     }
-    t = new_topic(title_from_name(pages[pi].name), NULL, pi, 0, -1);
+    t = new_topic(page_title(pi), NULL, pi, 0, -1);
     if (t >= 0) {
         stack[0] = t;
         depth = 1;
@@ -477,7 +484,9 @@ int book_done(const char* title)
     free(page_id);
     page_id = NULL;
     npage_id = max_page_id = 0;
-    book_title = title ? agon_string(title) : ntopics ? TOPIC(0).title : "";
+    book_title = title ? agon_string(title)
+                 : nav_site_name ? agon_string(nav_site_name)  /* mkdocs.yml's, as the builder's */
+                 : ntopics ? TOPIC(0).title : "";
 
     return ntopics ? 0 : -1;
 }

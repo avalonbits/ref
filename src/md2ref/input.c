@@ -22,6 +22,10 @@
 
 page* pages;
 int npages;
+nav_item* nav;
+int nav_count;
+int nav_first = -1;
+const char* nav_site_name;
 
 static int lower(int c)
 {
@@ -410,6 +414,238 @@ int page_next(line** lines, int* n)
     return 1;
 }
 
+/* --- the nav: mkdocs.yml ------------------------------------------------------ */
+
+#define NAV_MAX   16384             /* the most of an mkdocs.yml read */
+#define NAV_ITEMS 1024
+#define NAV_DEPTH 16
+
+/* The pages outside the nav, in a section of their own, last: as the
+ * builder names it. */
+#define OTHER_PAGES "Pages outside the menu"
+
+
+static int is_space(int c)
+{
+    return c == ' ' || c == '\t';
+}
+
+/* s, n bytes, its quotes off if it is quoted, as the builder's _unquote. */
+static void unquote(const char** s, int* n)
+{
+    if (*n >= 2 && (**s == '\'' || **s == '"') && (*s)[*n - 1] == **s) {
+        (*s)++;
+        *n -= 2;
+    }
+}
+
+static int new_item(const char* title, int tl, int page_no)
+{
+    nav_item* it;
+
+    if (nav_count == NAV_ITEMS) {
+        return -1;
+    }
+    it = &nav[nav_count];
+    it->title = arena_strndup(title, (unsigned)tl);
+    it->page = page_no;
+    it->child = -1;
+    it->next = -1;
+
+    return nav_count++;
+}
+
+/* An item of the nav under parent (-1 for the top), after the last there. */
+static void link_item(int k, int parent, int* last)
+{
+    if (last[0] >= 0) {
+        nav[last[0]].next = k;
+    } else if (parent >= 0) {
+        nav[parent].child = k;
+    } else {
+        nav_first = k;
+    }
+    last[0] = k;
+}
+
+static int add_page(const char* path);
+
+/* mkdocs.yml's site_name and nav, read as the builder's source.py reads
+ * them: each "- title: file", "- file" or "- title:" a line, nested by
+ * its indent, the pages' paths from dir. 0, -1 on an error, 1 with no
+ * mkdocs.yml. */
+static int read_nav(const char* dir)
+{
+    static char text[NAV_MAX + 1];
+    static int stack_indent[NAV_DEPTH + 1];
+    static int stack_item[NAV_DEPTH + 1];
+    static int stack_last[NAV_DEPTH + 1];
+    char* path = arena_alloc((unsigned)strlen(dir) + 12);
+    FILE* f;
+    unsigned n;
+    char* s;
+    int in_nav = 0;
+    int depth = 0;
+    int no = 0;
+
+    sprintf(path, "%s/mkdocs.yml", dir);
+    f = fopen(path, "rb");
+    if (!f) {
+        return 1;
+    }
+    n = (unsigned)fread(text, 1, NAV_MAX, f);
+    fclose(f);
+    text[n] = 0;
+    nav = arena_alloc(NAV_ITEMS * (unsigned)sizeof(nav_item));
+    stack_indent[0] = -1;
+    stack_item[0] = -1;
+    stack_last[0] = -1;
+    for (s = text; *s;) {
+        char* e = strchr(s, '\n');
+        int len = e ? (int)(e - s) : (int)strlen(s);
+        const char* l = s;
+        int k = 0;
+
+        s = e ? e + 1 : s + len;
+        no++;
+        while (len > 0 && (l[len - 1] == '\r' || is_space(l[len - 1]))) {
+            len--;
+        }
+        while (k < len && is_space(l[k])) {
+            k++;
+        }
+        if (!in_nav) {
+            if (len >= 9 && memcmp(l, "site_name", 9) == 0) {
+                int j = 9;
+
+                while (j < len && is_space(l[j])) {
+                    j++;
+                }
+                if (j < len && l[j] == ':') {
+                    const char* v = l + j + 1;
+                    int vl = len - j - 1;
+
+                    while (vl > 0 && is_space(*v)) {
+                        v++;
+                        vl--;
+                    }
+                    unquote(&v, &vl);
+                    nav_site_name = arena_strndup(v, (unsigned)vl);
+                }
+            } else if (len >= 3 && memcmp(l, "nav", 3) == 0) {
+                int j = 3;
+
+                while (j < len && is_space(l[j])) {
+                    j++;
+                }
+                in_nav = j < len && l[j] == ':' && j + 1 == len;
+            }
+            continue;
+        }
+        if (k == len || l[k] == '#') {
+            continue;                       /* blank, or a comment */
+        }
+        if (l[0] != ' ' && l[0] != '-') {
+            in_nav = 0;                     /* the next top-level key */
+            continue;
+        }
+        if (l[k] != '-' || k + 1 >= len || !is_space(l[k + 1])) {
+            md_error(path, no, "nav: cannot read this line");
+
+            return -1;
+        }
+        {
+            int indent = k;
+            const char* item = l + k + 1;
+            int il = len - k - 1;
+            const char* title = "";
+            int tl = 0;
+            const char* file = NULL;
+            int fl = 0;
+            int c;
+            int it;
+
+            while (il > 0 && is_space(*item)) {
+                item++;
+                il--;
+            }
+            /* "title: file", "title:", or "file": a title quoted, or up to
+             * its first colon. */
+            if (il > 0 && (*item == '\'' || *item == '"')) {
+                const char* q = memchr(item + 1, *item, (size_t)(il - 1));
+
+                c = q ? (int)(q - item) + 1 : -1;
+                while (c > 0 && c < il && is_space(item[c])) {
+                    c++;
+                }
+                if (c > 0 && c < il && item[c] == ':') {
+                    title = item + 1;
+                    tl = (int)(q - item) - 1;
+                } else {
+                    c = -1;
+                }
+            } else {
+                const char* colon = memchr(item, ':', (size_t)il);
+
+                c = colon ? (int)(colon - item) : -1;
+                if (c > 0) {
+                    title = item;
+                    tl = c;
+                    while (tl > 0 && is_space(title[tl - 1])) {
+                        tl--;
+                    }
+                } else {
+                    c = -1;
+                }
+            }
+            if (c >= 0) {
+                file = item + c + 1;
+                fl = il - c - 1;
+                while (fl > 0 && is_space(*file)) {
+                    file++;
+                    fl--;
+                }
+            } else {
+                file = item;
+                fl = il;
+            }
+            unquote(&file, &fl);
+            while (depth > 0 && stack_indent[depth] >= indent) {
+                depth--;
+            }
+            if (fl > 0) {
+                char* p = arena_alloc((unsigned)(strlen(dir) + (unsigned)fl + 2));
+
+                sprintf(p, "%s/%.*s", dir, fl, file);
+                if (add_page(p) != 0) {
+                    return -1;
+                }
+                pages[npages - 1].nav_title = tl ? arena_strndup(title, (unsigned)tl) : NULL;
+                it = new_item(title, tl, npages - 1);
+            } else {
+                it = new_item(title, tl, -1);
+            }
+            if (it < 0 || depth == NAV_DEPTH) {
+                md_error(path, no, "nav: too many items, or too deep");
+
+                return -1;
+            }
+            link_item(it, stack_item[depth], &stack_last[depth]);
+            depth++;
+            stack_indent[depth] = indent;
+            stack_item[depth] = it;
+            stack_last[depth] = -1;
+        }
+    }
+    if (nav_first < 0) {
+        md_error(path, 0, "has no nav");
+
+        return -1;
+    }
+
+    return 0;
+}
+
 /* --- directories -------------------------------------------------------------- */
 
 static char* found[MAX_PAGES];
@@ -503,12 +739,73 @@ static int is_dir(const char* path)
     return !ends_md(path);
 }
 
+static int by_name(const void* a, const void* b)
+{
+    return strcmp(*(char* const*)a, *(char* const*)b);
+}
+
+/* After the nav's pages, the directory's others, in a section of their
+ * own, last, in name order: as the builder puts them. 0, or -1. */
+static int others(const char* dir)
+{
+    int last = nav_first;
+    int section = -1;
+    int prev = -1;
+    int i;
+
+    if (list_dir(dir) != 0) {
+        md_error(dir, 0, "not a directory of .md pages");
+
+        return -1;
+    }
+    md_sort(found, (unsigned)nfound, (unsigned)sizeof(char*), by_name);
+    while (nav[last].next >= 0) {
+        last = nav[last].next;
+    }
+    for (i = 0; i < nfound; i++) {
+        int k;
+        int it;
+
+        for (k = 0; k < npages && strcmp(pages[k].path, found[i]) != 0; k++) {
+        }
+        if (k < npages) {
+            continue;                       /* in the nav */
+        }
+        if (section < 0) {
+            section = new_item(OTHER_PAGES, (int)strlen(OTHER_PAGES), -1);
+            if (section < 0) {
+                return -1;
+            }
+            nav[last].next = section;
+        }
+        if (add_page(found[i]) != 0 || (it = new_item("", 0, npages - 1)) < 0) {
+            return -1;
+        }
+        if (prev < 0) {
+            nav[section].child = it;
+        } else {
+            nav[prev].next = it;
+        }
+        prev = it;
+    }
+
+    return 0;
+}
+
 int read_pages(int nargs, char** args)
 {
     int i;
 
     pages = arena_alloc(MAX_PAGES * sizeof(page));
     if (nargs == 1 && is_dir(args[0])) {
+        int had = read_nav(args[0]);
+
+        if (had < 0) {
+            return -1;
+        }
+        if (had == 0) {
+            return others(args[0]);
+        }
         if (list_dir(args[0]) != 0) {
             md_error(args[0], 0, "not a directory of .md pages");
 
