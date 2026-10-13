@@ -398,8 +398,9 @@ static int run(int argc, char** argv)
         }
     }
     if (opt.version) {
-        sprintf(line, "ref %s, %s: %s (%s)\n", REF_VERSION, opt.name ? opt.name : opt.path,
-                book.commit, book.date);
+        /* The source's date, when the document has one: md2ref's have none. */
+        sprintf(line, book.date[0] ? "ref %s, %s: %s (%s)\n" : "ref %s, %s: %s\n", REF_VERSION,
+                opt.name ? opt.name : opt.path, book.commit, book.date);
         ui_print(line);
     } else if (opt.time_it) {
         result = batch_time(opt.path, opt.query) == 0 ? 0 : NOTHING;

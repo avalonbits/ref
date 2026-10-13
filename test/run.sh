@@ -71,13 +71,16 @@ check "ref -p -k prints the topic" \
 check "  all of it" "$(has "$out" 'commands instead.')" yes
 
 sd=$(emu_card "$RELEASE")
-printf 'ref -v mos\r\n' > "$sd/autoexec.txt"
+cp "$ROOT/out/ref.dat" "$sd/config/ref/docs/"
+printf 'ref -v mos\r\nref -v ref\r\n' > "$sd/autoexec.txt"
 out=$(emu_run "$sd" 60)
 rm -rf "$sd"
 version=$(sed -n 's/^#define REF_VERSION "\(.*\)"/\1/p' "$ROOT/src/viewer/version.h")
 commit=$(sed -n 's/^commit \(.\{12\}\).*/\1/p' "$ROOT/SOURCE")
 check "ref -v says its version, and which agon-docs" \
-      "$(grep -a '^ref ' <<< "$out")" "ref $version, mos: $commit (2026-07-15)"
+      "$(grep -a '^ref .*, mos: ' <<< "$out")" "ref $version, mos: $commit (2026-07-15)"
+check "  and of a document md2ref made, which has no date, none" \
+      "$(grep -a '^ref .*, ref: ' <<< "$out")" "ref $version, ref: md2ref"
 
 # ref's own book, beside mos: listed by its title, and read.
 sd=$(emu_card "$RELEASE")
