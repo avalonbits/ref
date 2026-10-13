@@ -1075,8 +1075,19 @@ void words_markup_names(const uint8_t* m, unsigned n)
 
         s += 3;                             /* the block's head */
         while (s < e && *s != REF_END) {
-            uint8_t b = *s;
+            uint8_t b;
 
+            if (!depth) {
+                /* Outside a name -- most of a table -- only a code can
+                 * matter: passed over to the next. */
+                while (s < e && *s >= 0x20) {
+                    s++;
+                }
+                if (s >= e || *s == REF_END) {
+                    break;
+                }
+            }
+            b = *s;
             if (b == REF_EM_ON || b == REF_CODE_ON || b == REF_LINK) {
                 depth++;
                 s += b == REF_LINK ? 3 : 1;
