@@ -9,16 +9,19 @@ MOS 3.0.2.
 
 ## Installing
 
-Copy ref, and each document, to the SD card:
+Download `ref-0.2.0.zip` from the
+[latest release](https://github.com/avalonbits/ref/releases/latest) and
+unzip it at the root of the SD card. Everything lands where ref looks for
+it:
 
     /bin/ref.bin
     /bin/md2ref.bin                 to write documents (see below)
-    /config/ref/docs/mos.dat
+    /config/ref/docs/mos.dat        agon-docs, at the commit in SOURCE
+    /config/ref/docs/VERSION        ref's version, and which agon-docs
     /config/ref/docs/<name>.dat     any other document
 
-There is no release to download yet. mos.dat is the wiki's own text, and
-agon-docs has no license, so until its maintainers settle one, build
-mos.dat yourself for your own card (see [Building](#building)).
+`ref-builder-0.2.0.zip` is the builder, to make mos.dat again on a PC or
+Mac (see [Building](#building)).
 
 A document's name is its file's, without `.dat`: one to eight lower-case
 letters and digits. ref also finds documents in the current directory,
@@ -120,7 +123,7 @@ error, and `-e <file>` writes the errors and warnings to that file as well
 as the console -- the file is made even when there are none. `-f` puts
 every word in the search's index, not only the names (below), and `-z`
 compresses each topic: both make md2ref slower on the Agon, `-z` by about
-a quarter, for a document about 30% smaller.
+two fifths, for a document about 30% smaller.
 
 ade compiles a program's Markdown, wherever it is, into the program's
 `ref-doc/`; `ref myprog`, run in `ref-doc/`, reads it, and
@@ -153,9 +156,10 @@ line. `-w` makes a link that leads nowhere a warning.
 md2ref reads each page once, through a small window, as acc and zap read
 source, and writes each topic as soon as it is read: memory holds the
 outline -- titles, anchors, keys -- and one topic, however long the pages.
-All of agon-docs, 637 KB of Markdown, compiles on the Agon in 280 KB.
-While it works it keeps two or three scratch files beside the document
-(`<name>.dat~t`, `~w`, `~r`), and removes them when it is done. One block
+All of agon-docs, 637 KB of Markdown, compiles on the Agon in about 21
+seconds and 220 KB of memory. While it works it keeps four or five scratch
+files beside the document (`<name>.dat~t`, `~w`, `~k`, `~l`, and `~r` when
+the words outgrow memory), and removes them when it is done. One block
 -- a code block, a table, a list -- can be up to 32 KB.
 
 ## Building

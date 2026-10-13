@@ -394,8 +394,8 @@ It ends with "Done in N.NN seconds", worded as zap and acc word it, from
 MOS's clock. Under an emulator running flat out that clock means nothing,
 so `make agon-md2ref-cycles` builds one that has the emulator count its
 cycles instead (IO ports 0x40 and 0x41, fab-agon-emulator 2037657 on), as
-acc's bench does. All of agon-docs takes 419 million cycles: 23 seconds
-at the Agon's 18.432 MHz (632 million with `-f`). That is a lower bound. The count is exact for
+acc's bench does. All of agon-docs takes 381 million cycles: 21 seconds
+at the Agon's 18.432 MHz (594 million with `-f`). That is a lower bound. The count is exact for
 the eZ80's own work, but the emulator charges nothing for reading the SD
 card, and md2ref reads its pages and three scratch files. The ports are
 written around the work alone, so loading and MOS's start-up are not
