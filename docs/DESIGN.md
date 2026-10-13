@@ -11,11 +11,17 @@ its own documentation. Any other tool can write the format too.
 
 ```mermaid
 flowchart TD
-    src["agon-docs<br>(Markdown, at the commit in SOURCE)"]
-    dat["mos.dat<br>(about 470 KB)"]
+    docs["agon-docs<br/>(Markdown, at the commit in SOURCE)"]
+    pages["any Markdown pages<br/>(a program's own documentation)"]
+    mos["mos.dat<br/>(about 470 KB)"]
+    dat["ref-doc/#lt;name#gt;.dat"]
+    core["src/core — the reader core<br/>open, decompress, look up, search, lay out"]
     screen["src/viewer → the screen"]
-    src -- "build/refbuild: parse, split into topics, resolve links,<br>extract keys, render, compress, index" --> dat
-    dat -- "src/core: open, decompress, look up, search, lay out" --> screen
+    docs -->|"build/refbuild, on a PC or Mac:<br/>parse, split into topics, resolve links,<br/>extract keys, render, compress, index"| mos
+    pages -->|"md2ref, on the Agon or a PC"| dat
+    mos --> core
+    dat --> core
+    core --> screen
 ```
 
 The Agon has 512 KB and the wiki is 700 KB of text, so nothing is loaded
@@ -25,6 +31,17 @@ whole: a document is read a topic, a key block or a word block at a time.
 
 `python3 -m refbuild` ([`__main__.py`](../build/refbuild/__main__.py)) runs
 these steps in order.
+
+```mermaid
+flowchart TD
+    main["__main__.py — main()"] --> src["source.py — read_source(), fetch()<br/>agon-docs at SOURCE's commit, its nav and title"]
+    src --> rules["rules.py — load()<br/>build/rules.toml"]
+    rules --> book["book.py — build()<br/>each page parsed (markdown.py) into topics,<br/>anchors worked out, every link a topic"]
+    book --> keys["keys.py — build()<br/>keys by the rules, normalised (normalize.py);<br/>the gaps"]
+    keys --> dat["refdat.py — build()<br/>markup (render.py), the full text (fulltext.py),<br/>each topic compressed (lz4.py), the file"]
+    dat --> out[("out/mos.dat")]
+    dat --> rep["report.py — the report,<br/>the gaps against build/gaps.txt"]
+```
 
 **The source.** [`source.py`](../build/refbuild/source.py) reads
 [`SOURCE`](../SOURCE), fetches agon-docs at that commit once into
@@ -143,6 +160,21 @@ tests. [`refcore.h`](../src/core/refcore.h) is its API.
   leaf functions that the compiler keeps in registers, which is what makes
   the largest topic quick to show.
 
+```mermaid
+flowchart LR
+    open["refcore.c — ref_open()<br/>the header, the small tables"]
+    view["refcore.c — ref_view()<br/>a topic and those shown with it"]
+    lz4["lz4.c — ref_lz4()"]
+    lookup["keys.c — ref_lookup(), ref_keys_from()<br/>a block from the directory, read through"]
+    norm["normalize.c — ref_normalize()"]
+    search["search.c — ref_search()"]
+    layout["layout.c — ref_layout()<br/>markup into lines"]
+    view --> lz4
+    lookup --> norm
+    search -->|"the words' blocks, read as the keys' are"| lookup
+    view -.->|"its markup"| layout
+```
+
 Buffers are allocated by `ref_open` and sized from the header. Large ones
 are static or on the heap: agondev's stack frames are kept under 128 bytes,
 which [`test/frames.sh`](../test/frames.sh) enforces.
@@ -187,6 +219,30 @@ which [`test/frames.sh`](../test/frames.sh) enforces.
   every spelling of a key to what it means.
 - [`screen.c`](../src/viewer/screen.c) draws.
 
+```mermaid
+flowchart TD
+    main["main.c — the command line"]
+    shelf["shelf.c — the documents, to choose from"]
+    batch["batch.c — -p and -T"]
+    nav["nav.c — nav_run(): view to view"]
+    view["view.c — a topic on the screen"]
+    toc["toc.c — the contents"]
+    pick["pick.c — lists, search as you type"]
+    help["help.c"]
+    doc["doc.c — the topic in lines,<br/>its links and headings"]
+    input["input.c — keys"]
+    screen["screen.c — drawing"]
+    core[["src/core"]]
+
+    main --> shelf & batch & nav
+    nav --> view & toc & pick
+    view --> doc & help
+    batch --> doc
+    view & toc & pick & shelf & help --> input
+    view & toc & pick & shelf & help --> screen
+    main & shelf & view & toc & pick & batch & doc --> core
+```
+
 **The screen.** The top row is a header with the document's title, then the
 text rows inside a margin each side, then a status line. Each row is drawn
 whole and sent in one RST 18h call. Colours are chosen by role and mapped
@@ -217,6 +273,25 @@ is portable C, built for the PC by `make host` and for the Agon by
 [`md2ref.h`](../src/md2ref/md2ref.h) lists its files. It reads each page
 once, and writes each topic as soon as it can:
 
+```mermaid
+flowchart TD
+    main["main() — the command line"] --> init["words_init() — the words' dictionary,<br/>first, at the bottom of the heap"]
+    init --> pages["read_pages() — which pages, index first"]
+    pages --> page["read_page() — each page"]
+    page --> next["page_next() — a run of whole blocks,<br/>each line read once"]
+    next --> parse["parse_run() — the run into blocks"]
+    parse --> blocks{"each block"}
+    blocks -->|"a heading at the margin"| head["render_end() the topic before;<br/>book_heading() — a new topic;<br/>render_complete() — those it ends, written;<br/>render_begin() — this one"]
+    blocks -->|"any other"| block["render_block() — into the topic's markup,<br/>its words taken as it is written"]
+    head & block --> more{"more?"}
+    more -->|"the run's next block"| blocks
+    more -->|"the next run"| next
+    more -->|"the page read"| done["book_page_done() — its anchors,<br/>the links waiting for it settled"]
+    done -->|"the next page"| page
+    done --> fin["book_done(), render_done(), number_topics(),<br/>resolve_pending(), make_keys()"]
+    fin --> write["write_book() — the tables, the text copied in<br/>and patched, the words sorted and merged"]
+```
+
 | Step | Where | What |
 |---|---|---|
 | pages | [`input.c`](../src/md2ref/input.c) | the files given, or a directory's `.md` files, index first; each read through a window a *run* at a time |
@@ -244,6 +319,26 @@ an assembler settles a forward reference:
   they do in the markup; with `-z` the compressor leaves them as literals,
   never matched or matched from, so they still do. When the document is put together, every anchor known,
   each is patched as the text is copied in.
+```mermaid
+sequenceDiagram
+    participant R as render (inline.c, render.c)
+    participant B as book.c
+    participant W as write.c
+    participant C as the card
+    Note over R: a link to later.md, not read yet
+    R->>B: resolve_link() — PENDING
+    B->>C: the link and its href, to the links file
+    R->>R: LINK FF FF in the markup
+    Note over R: the topic complete
+    R->>W: write_text(), then add_patch(at): a patch waiting
+    R->>B: link_placed(link, patch): chained to the link's others
+    Note over B: ... later.md read ...
+    B->>C: book_page_done() — settle(): each link read back
+    B->>W: set_patch(): the topic, into each patch of its chain
+    Note over W: write_book() — copy_text()
+    W->>C: the text copied into the document, each patch's two bytes put in
+```
+
 - **Links to a topic's children** are added only if it shows too much with
   its descendants, which is only known once the last of them is read. So a
   topic is held until then. Only its ancestors are held with
@@ -281,6 +376,19 @@ big is taken once, early: the words' dictionary, a fixed 24 KB at the
 bottom of the heap (40 KB with `-f`), with its table freed once the pages
 are read.
 Grown a piece at a time, as it was, it left no room for a large topic.
+
+```mermaid
+flowchart TB
+    subgraph ram ["0x040000 – 0x0B0000: what MOS gives a program"]
+        direction TB
+        img["md2ref.bin: code and data, about 90 KB"]
+        bss["statics, about 35 KB"]
+        dict["the words' dictionary, 24 KB (40 KB with -f),<br/>and its table: taken first, the table freed once the pages are read"]
+        heap["the heap, about 330 KB in all ↑: the book's arena (the outline),<br/>the topics, a run's source arena, the topic's markup,<br/>the topics held, the window, the files' buffers"]
+        stack["the stack ↓"]
+    end
+    img --- bss --- dict --- heap --- stack
+```
 
 It ends with "Done in N.NN seconds", worded as zap and acc word it, from
 MOS's clock. Under an emulator running flat out that clock means nothing,
