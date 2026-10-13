@@ -252,11 +252,25 @@ static int footnote(const line* l)
 
 /* --- tables ---------------------------------------------------------------------- */
 
+/* The backticks from p on, to e: how many in a row. */
+static int ticks_at(const char* p, const char* e)
+{
+    const char* q = p;
+
+    while (q < e && *q == '`') {
+        q++;
+    }
+
+    return (int)(q - p);
+}
+
 int split_row(const char* s, int len, const char** cells, int* lens, int max)
 {
+    const char* p;
+    const char* e;
+    const char* start;
     int n = 0;
     int k = 0;
-    int start;
     int in_code = 0;
 
     while (len > 0 && s[len - 1] == ' ') {
@@ -271,46 +285,50 @@ int split_row(const char* s, int len, const char** cells, int* lens, int max)
     if (len > k && s[len - 1] == '|' && (len < 2 || s[len - 2] != '\\')) {
         len--;
     }
-    start = k;
-    for (; k <= len; k++) {
-        if (k < len && s[k] == '`') {
-            int run = 0;
-            int j;
+    /* By pointer, compared unsigned -- an int's < is a call on the eZ80 --
+     * and a code span's closing backticks found from run to run by memchr,
+     * where every place after an opening was compared with it. */
+    e = s + len;
+    start = s + k;
+    for (p = start; p <= e; p++) {
+        if (p < e && *p == '`') {
+            int run = ticks_at(p, e);
 
-            while (k + run < len && s[k + run] == '`') {
-                run++;
-            }
             if (!in_code) {
-                /* Code only when the run is closed later in the row. */
-                for (j = k + run; j + run <= len; j++) {
-                    if (memcmp(s + j, s + k, (size_t)run) == 0
-                        && (j + run == len || s[j + run] != '`') && s[j - 1] != '`') {
+                /* Code only when a run of as many closes it later in the row. */
+                const char* q = p + run;
+
+                while (q < e && (q = memchr(q, '`', (size_t)(e - q))) != NULL) {
+                    int r = ticks_at(q, e);
+
+                    if (r == run) {
                         in_code = run;
                         break;
                     }
+                    q += r;
                 }
             } else if (in_code == run) {
                 in_code = 0;
             }
-            k += run - 1;
+            p += run - 1;
             continue;
         }
-        if (k == len || (s[k] == '|' && !in_code && (k == 0 || s[k - 1] != '\\'))) {
-            int a = start;
-            int b = k;
+        if (p == e || (*p == '|' && !in_code && (p == s || p[-1] != '\\'))) {
+            const char* a = start;
+            const char* b = p;
 
-            while (a < b && s[a] == ' ') {
+            while (a < b && *a == ' ') {
                 a++;
             }
-            while (b > a && s[b - 1] == ' ') {
+            while (b > a && b[-1] == ' ') {
                 b--;
             }
             if (n < max) {
-                cells[n] = s + a;
-                lens[n] = b - a;
+                cells[n] = a;
+                lens[n] = (int)(b - a);
             }
             n++;
-            start = k + 1;
+            start = p + 1;
         }
     }
 

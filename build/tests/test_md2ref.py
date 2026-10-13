@@ -572,6 +572,17 @@ class Md2ref(unittest.TestCase):
         self.assertGreater(len(v[1]), 65400)
         self.assertTrue(v[1].endswith(laid), (v[1][-200:], laid))
 
+    def test_a_pipe_in_a_code_span_is_no_cell_break(self):
+        # A row's cells split at its pipes, but not one in a code span --
+        # which a run of as many backticks closes later in the row: a single
+        # backtick left open is text, and ``a`|`b`` is one span.
+        page = ('# T\n\n| A | B | C |\n|---|---|---|\n| `a|b` | x | y |\n| `open | p | q |\n'
+                '| ``a`|`b`` | c | d |\n| `x``|`` | e | f |\n')
+        p, data, left = compile_pages({'index.md': page})
+        self.assertEqual(p.returncode, 0, p.stdout)
+        self.assertIn(b'\x12a|b\x13   | x | y\n`open | p | q\n\x12a`|`b\x13 | c | d\n'
+                      b'`x\x12|\x13   | e | f\n', b''.join(views(data)))
+
     def test_table_rows_are_ruled_apart_only_when_one_wraps(self):
         # Body rows are ruled apart when any of them wraps: one with a line
         # break in it does, though no wider than its column; one exactly as
