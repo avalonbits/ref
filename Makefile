@@ -41,7 +41,7 @@ MD2REF_OBJS = OBJS='$$(patsubst src/%.c,$$(OBJDIR)/%.o,$$(wildcard src/md2ref/*.
 AGON_MAKE = PATH=$(AGONDEV)/bin:$$PATH $(MAKE) -f agon.mk $(REF_OBJS)
 MD2REF_MAKE = PATH=$(AGONDEV)/bin:$$PATH $(MAKE) -f md2ref.mk $(MD2REF_OBJS)
 
-.PHONY: all dat host acc-core test frames agon agon-script agon-heap agon-md2ref \
+.PHONY: all dat book host acc-core test frames agon agon-script agon-heap agon-md2ref \
 	agon-md2ref-heap agon-md2ref-cycles emu
 
 ZMALLOC_FLAGS = -DZMALLOC -Dmalloc=z_malloc -Dcalloc=z_calloc -Drealloc=z_realloc -Dfree=z_free
@@ -51,6 +51,15 @@ all: dat
 dat:
 	@mkdir -p out
 	cd build && $(PYTHON) -m refbuild --report ../out/report.txt
+
+# ref's own book, docs/ref/*.md shelved by docs/ref/mkdocs.yml, as
+# out/ref.dat: `ref ref -k md2ref`. md2ref writes it, so it is ref's
+# documents' way, and a link in it that leads nowhere stops the build.
+book: out/ref.dat
+
+out/ref.dat: out/host/md2ref $(wildcard docs/ref/*.md) docs/ref/mkdocs.yml
+	@mkdir -p out
+	out/host/md2ref -o $@ docs/ref > /dev/null
 
 # -fsigned-char: char is signed on the eZ80, so the PC build reads bytes the
 # way the Agon builds do.

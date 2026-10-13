@@ -412,6 +412,12 @@ Those two are in eZ80 assembly on the Agon, beside the C the PC runs:
 and `test/md2ref.sh` holds what the Agon writes to what the PC does, byte
 for byte -- agon-docs, and a page of the copy's edge cases.
 
+**ref's own book.** [`docs/ref`](ref) is ref's documentation as a ref
+document, `ref.dat`: its pages shelved in sections by an `mkdocs.yml`,
+compiled by md2ref (`make book`) and shipped in the release beside
+mos.dat. [`test_refbook.py`](../build/tests/test_refbook.py) holds every
+option ref and md2ref take, read from their sources, to be a key in it.
+
 **Not the builder.** md2ref has no rules file: no hand-made keys, no link
 fixes, no gaps report, no shared dictionary. Its keys are what headings
 say. The builder stays the way agon-docs is made.

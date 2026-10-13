@@ -1,0 +1,17 @@
+# ref's own book, for ref: `make book` writes out/ref.dat with md2ref,
+# which reads this menu as MkDocs does, each section a heading in the
+# contents. Every page here has to be in it.
+site_name: ref, the Agon's documentation reader
+nav:
+  - Reading:
+      - using.md
+      - keys.md
+      - options.md
+      - mos.md
+  - Writing documents:
+      - md2ref.md
+      - md2ref-options.md
+      - markdown.md
+      - nav.md
+  - The format:
+      - format.md

@@ -6,6 +6,7 @@
 #       bin/md2ref.bin              Markdown into documents
 #       config/ref/LICENSE          ref's and md2ref's: GPL version 3 only
 #       config/ref/docs/mos.dat     agon-docs at the commit in SOURCE
+#       config/ref/docs/ref.dat     ref's own book: `ref ref`
 #       config/ref/docs/VERSION     ref's version, the commit it was built
 #                                   from, and the agon-docs commit
 #   ref-builder-<version>.zip   the builder, to make mos.dat on a PC or Mac:
@@ -30,7 +31,7 @@ DEST=$(cd "${1:-.}" && pwd)
 command -v zip >/dev/null || { echo "mkrelease: zip is not installed" >&2; exit 1; }
 
 # Built fresh, and tested: a release from a stale binary is found by a user.
-make -s dat agon agon-md2ref test >/dev/null
+make -s dat book agon agon-md2ref test >/dev/null
 
 COMMIT=$(git rev-parse HEAD 2>/dev/null || echo unknown)
 if [ "$COMMIT" != unknown ] && ! git diff --quiet HEAD 2>/dev/null; then
@@ -43,7 +44,7 @@ trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$STAGE/card/bin" "$STAGE/card/config/ref/docs" "$STAGE/builder"
 cp bin/ref.bin bin/md2ref/md2ref.bin "$STAGE/card/bin/"
 cp LICENSE "$STAGE/card/config/ref/"
-cp out/mos.dat "$STAGE/card/config/ref/docs/"
+cp out/mos.dat out/ref.dat "$STAGE/card/config/ref/docs/"
 printf 'ref %s\ncommit %s\nagon-docs %s\n' "$VERSION" "$COMMIT" "$DOCS" > "$STAGE/card/config/ref/docs/VERSION"
 cp -r SOURCE build LICENSE "$STAGE/builder/"
 rm -rf "$STAGE/builder/build/cache"

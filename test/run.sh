@@ -39,6 +39,7 @@ fi
 
 # --- builds ---
 make -s -C "$ROOT" dat > /dev/null || { echo "FAIL  ref.dat"; exit 1; }
+make -s -C "$ROOT" book > /dev/null || { echo "FAIL  ref's book, out/ref.dat"; exit 1; }
 make -s -C "$ROOT" agon agon-script > /dev/null 2>&1 || { echo "FAIL  build"; exit 1; }
 RELEASE=$ROOT/bin/ref.bin
 SCRIPTED=$ROOT/bin/script/ref.bin
@@ -77,6 +78,17 @@ version=$(sed -n 's/^#define REF_VERSION "\(.*\)"/\1/p' "$ROOT/src/viewer/versio
 commit=$(sed -n 's/^commit \(.\{12\}\).*/\1/p' "$ROOT/SOURCE")
 check "ref -v says its version, and which agon-docs" \
       "$(grep -a '^ref ' <<< "$out")" "ref $version, mos: $commit (2026-07-15)"
+
+# ref's own book, beside mos: listed by its title, and read.
+sd=$(emu_card "$RELEASE")
+cp "$ROOT/out/ref.dat" "$sd/config/ref/docs/"
+printf '%s\r\n' 'ref -p' 'ref ref -p -k site_name' > "$sd/autoexec.txt"
+out=$(emu_run "$sd" 60)
+rm -rf "$sd"
+check "ref's own book is on the shelf, by its title" \
+      "$(grep -ac "^ref  *ref, the Agon's documentation reader" <<< "$out")" 1
+check "  and ref ref -k finds a topic in it" \
+      "$(grep -ac "^The document's title, unless -t gives one\.$" <<< "$out")" 1
 
 # Each command under Try, so autoexec carries on after a failure, and its
 # result shown. 0 when something was found, 100 when not; never 1, 4 or 5.

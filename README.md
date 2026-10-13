@@ -17,6 +17,7 @@ it:
     /bin/ref.bin
     /bin/md2ref.bin                 to write documents (see below)
     /config/ref/docs/mos.dat        agon-docs, at the commit in SOURCE
+    /config/ref/docs/ref.dat        ref's own book: `ref ref`
     /config/ref/docs/VERSION        ref's version, and which agon-docs
     /config/ref/docs/<name>.dat     any other document
 
@@ -30,6 +31,9 @@ where a program can keep its own: run there, `ref <name>` opens
 `ref` lists both, the current directory's marked `.`. Any project can ship its documentation as a document:
 write it in Markdown and compile it with md2ref, or write the format,
 specified in [docs/FORMAT.md](docs/FORMAT.md), with any tool.
+
+ref has a book of its own, `ref`: its keys, its options and md2ref's, and
+the Markdown md2ref reads. `ref ref`, or `ref ref <word>`.
 
 ## Looking things up
 
@@ -187,6 +191,7 @@ at the commit pinned in [`SOURCE`](SOURCE). ref.bin is built with
 [agondev](https://github.com/AgonPlatform/agondev).
 
     make dat            fetch agon-docs and write out/mos.dat
+    make book           ref's own book, docs/ref, as out/ref.dat
     make agon           bin/ref.bin
     make agon-md2ref    bin/md2ref/md2ref.bin
     make host           md2ref for the PC: out/host/md2ref
