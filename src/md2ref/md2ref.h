@@ -234,6 +234,8 @@ typedef struct {
     uint8_t page;           /* at most MAX_PAGES */
     uint8_t level;
     uint8_t heading;        /* it starts at a heading: its first block's */
+    uint8_t pad[4];         /* to 32 bytes: TOPIC(t) is then a shift, where at
+                               28 it was a call to multiply, at every use */
 } topic;
 
 /* The topics, in blocks of 256 that never move once made: a pointer to one

@@ -162,10 +162,13 @@ struct interned {
     char key[1];
 };
 
+/* Eight bytes: entries[k] a shift, where at six it was a call to multiply
+ * at every use, building, sorting and front-coding the keys. */
 typedef struct {
     const char* key;
     uint16_t topic;
     uint8_t in_title;
+    uint8_t pad[2];
 } entry;
 
 /* Twice as many buckets as keys at most, so a chain is a key or two

@@ -449,7 +449,7 @@ static void emit_styled(const cell* c, int from, int to, int force_em)
  * at most h is not, then as many as it takes of those at h + 1 to h, the
  * first first. A binary search for h, where a character at a time was
  * the excess times the columns. */
-static int capped(const int* w, const int* min, int n, int h)
+static int capped(const uint16_t* w, const uint16_t* min, int n, int h)
 {
     int total = 0;
     int c;
@@ -461,7 +461,7 @@ static int capped(const int* w, const int* min, int n, int h)
     return total;
 }
 
-static void fit_widths(int* w, const int* min, int n, int room)
+static void fit_widths(uint16_t* w, const uint16_t* min, int n, int room)
 {
     int lo = 0;
     int hi = 0;
@@ -494,9 +494,9 @@ static void fit_widths(int* w, const int* min, int n, int room)
     for (c = 0; c < n; c++) {
         int was = w[c];
 
-        w[c] = was < lo + 1 ? was : min[c] > lo + 1 ? min[c] : lo + 1;
+        w[c] = (uint16_t)(was < lo + 1 ? was : min[c] > lo + 1 ? min[c] : lo + 1);
         if (excess > 0 && w[c] == lo + 1 && min[c] <= lo) {
-            w[c] = lo;
+            w[c] = (uint16_t)lo;
             excess--;
         }
     }
@@ -506,12 +506,14 @@ static void table(const page* p, const block* b)
 {
     static const char* cells[MAX_COLS];
     static int lens[MAX_COLS];
-    static int natural[MAX_COLS];
-    static int minimum[MAX_COLS];
-    static int widths[MAX_COLS];
+    /* 16 bits, as a column's width is at most CELL_MAX: a subscript is then
+     * a shift, where an int's three bytes were a call to multiply. */
+    static uint16_t natural[MAX_COLS];
+    static uint16_t minimum[MAX_COLS];
+    static uint16_t widths[MAX_COLS];
     static uint16_t from[MAX_COLS][64];     /* 128 bytes a column: a shift */
     static uint16_t to[MAX_COLS][64];
-    static int nlines[MAX_COLS];
+    static uint16_t nlines[MAX_COLS];
     const char* s = b->text;
     int nrows = 0;
     int ncols = 0;
@@ -549,13 +551,13 @@ static void table(const page* p, const block* b)
             int lw = row[c].longest;
 
             if (w > natural[c]) {
-                natural[c] = w;
+                natural[c] = (uint16_t)w;
             }
             if (lw > longest) {
                 longest = lw;
             }
         }
-        minimum[c] = longest < 20 ? longest : 20;
+        minimum[c] = (uint16_t)(longest < 20 ? longest : 20);
         if (minimum[c] < 10) {
             minimum[c] = 10;
         }
@@ -594,7 +596,7 @@ static void table(const page* p, const block* b)
             put('\n');
         }
         for (c = 0; c < ncols; c++) {
-            nlines[c] = wrap_cell(&row[c], widths[c], from[c], to[c], 64);
+            nlines[c] = (uint16_t)wrap_cell(&row[c], widths[c], from[c], to[c], 64);
             if (nlines[c] > height) {
                 height = nlines[c];
             }
