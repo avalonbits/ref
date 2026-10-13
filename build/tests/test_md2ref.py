@@ -555,6 +555,18 @@ class Md2ref(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stdout)
         self.assertIn(b'\x10em\x11 | \x12code\x13\n', b''.join(views(data)))
 
+    def test_table_rows_are_ruled_apart_only_when_one_wraps(self):
+        # Body rows are ruled apart when any of them wraps: one with a line
+        # break in it does, though no wider than its column; one exactly as
+        # wide as its column does not.
+        page = ('# T\n\n| A | B |\n|---|---|\n| abc | x |\n| de | y |\n\n'
+                '## U\n\n| A | B |\n|---|---|\n| a<br>b | x |\n| defg | y |\n')
+        p, data, left = compile_pages({'index.md': page})
+        self.assertEqual(p.returncode, 0, p.stdout)
+        v = views(data)
+        self.assertIn(b'----+--\nabc | x\nde  | y\n\x00', v[0])
+        self.assertIn(b'-----+--\na    | x\nb    |\n-----+--\ndefg | y\n\x00', v[1])
+
     def test_table_columns_narrowed_as_before(self):
         # Columns too wide for the screen are narrowed as narrowing the
         # widest that can still give, a character at a time, left them --

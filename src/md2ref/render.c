@@ -161,10 +161,16 @@ typedef struct {
     uint16_t link;
 } styled;
 
+/* A cell's characters, and what laying it out asks of them, found as they
+ * are made: its widest line, its longest word, and whether a line break
+ * is in it. Sixteen bytes. */
 typedef struct {
     styled* c;
     int n;
-    uint8_t pad[2];
+    uint16_t widest;
+    uint16_t longest;
+    uint8_t broken;
+    uint8_t pad[5];
 } cell;
 
 /* A cell's inline Markdown as styled characters. */
@@ -177,6 +183,8 @@ static cell styled_cell(const page* p, int no, const char* s, int slen)
     int em = 0;
     int code = 0;
     uint16_t link = NO_LINK;
+    unsigned line_run = 0;
+    unsigned word_run = 0;
     int k;
 
     in_cell = 1;
@@ -188,6 +196,9 @@ static cell styled_cell(const page* p, int no, const char* s, int slen)
     }
     out.c = source_alloc((unsigned)(n + 1) * sizeof(styled));
     out.n = 0;
+    out.widest = 0;
+    out.longest = 0;
+    out.broken = 0;
     for (k = 0; k < n; k++) {
         int b = m[k];
 
@@ -214,44 +225,23 @@ static cell styled_cell(const page* p, int no, const char* s, int slen)
             c->ch = (uint8_t)(b == BREAK ? '\n' : b);
             c->style = (uint8_t)((em ? ST_EM : 0) | (code ? ST_CODE : 0));
             c->link = link;
+            if (b == BREAK) {
+                line_run = word_run = 0;
+                out.broken = 1;
+            } else {
+                if (++line_run > out.widest) {
+                    out.widest = (uint16_t)line_run;
+                }
+                if (b == ' ') {
+                    word_run = 0;
+                } else if (++word_run > out.longest) {
+                    out.longest = (uint16_t)word_run;
+                }
+            }
         }
     }
 
     return out;
-}
-
-static int longest_word(const cell* c)
-{
-    int best = 0;
-    int run = 0;
-    int k;
-
-    for (k = 0; k < c->n; k++) {
-        if (c->c[k].ch == ' ' || c->c[k].ch == '\n') {
-            run = 0;
-        } else if (++run > best) {
-            best = run;
-        }
-    }
-
-    return best;
-}
-
-static int widest_line(const cell* c)
-{
-    int best = 0;
-    int run = 0;
-    int k;
-
-    for (k = 0; k < c->n; k++) {
-        if (c->c[k].ch == '\n') {
-            run = 0;
-        } else if (++run > best) {
-            best = run;
-        }
-    }
-
-    return best;
 }
 
 /* A cell wrapped to width: where each line starts and ends, into from/to;
@@ -454,8 +444,8 @@ static void table(const page* p, const block* b)
 
         natural[c] = 1;
         for (r = 0, row = grid; r < nrows; r++, row += ncols) {
-            int w = widest_line(&row[c]);
-            int lw = longest_word(&row[c]);
+            int w = row[c].widest;
+            int lw = row[c].longest;
 
             if (w > natural[c]) {
                 natural[c] = w;
@@ -475,10 +465,13 @@ static void table(const page* p, const block* b)
     }
     fit_widths(widths, minimum, ncols, TABLE_WIDTH - 3 * (ncols - 1));
 
-    /* Any body row wrapped? Then rows are ruled apart. */
+    /* Any body row wrapped? Then rows are ruled apart. A cell wraps -- to
+     * more than one line, as wrap_cell lays it out -- when it is wider
+     * than its column or a line break is in it: it never starts with a
+     * space, the copy of its text having dropped any. */
     for (r = 1, row = grid + ncols; r < nrows; r++, row += ncols) {
         for (c = 0; c < ncols; c++) {
-            if (wrap_cell(&row[c], widths[c], from[c], to[c], 64) > 1) {
+            if (row[c].n > widths[c] || row[c].broken) {
                 wrapped = 1;
             }
         }
