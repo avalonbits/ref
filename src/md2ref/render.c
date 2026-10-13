@@ -100,7 +100,9 @@ static __attribute__((noinline)) void room_for(unsigned need)
     cap = more;
 }
 
-static void put(int b)
+/* Inlined where it is called: a table is written a byte at a time, and
+ * a call and its frame for each byte was a sixth of laying one out. */
+static inline __attribute__((always_inline)) void put(int b)
 {
     if (len < TOPIC_MAX) {
         if (len >= cap) {

@@ -218,8 +218,9 @@ static int spaces(const char* s, int len)
 }
 
 /* The line from r to e as the parser sees it, \r dropped, tabs expanded
- * (into out, room for them, when it has any), its indent counted. */
-static line seen_into(unsigned r, int e, char* out)
+ * (into out, room for them, when it has any: tabs says, as the caller
+ * has counted them), its indent counted. */
+static line seen_into(unsigned r, int e, char* out, int tabs)
 {
     line l;
     const char* s = win + beg + r;
@@ -231,7 +232,7 @@ static line seen_into(unsigned r, int e, char* out)
     l.text = s;
     l.len = len;
     l.no = 0;
-    if (tabs_in(s, len)) {
+    if (tabs) {
         l.len = expand(s, len, out);
         l.text = out;
     }
@@ -245,14 +246,15 @@ static line seen(unsigned r, int e)
 {
     const char* s = win + beg + r;
     int len = e - (int)r;
-    unsigned need = (unsigned)(len + tabs_in(s, len) * 3 + 1);
+    int tabs = tabs_in(s, len);
+    unsigned need = (unsigned)(len + tabs * 3 + 1);
 
     if (need > look_size) {
         look_size = need;
         look = md_realloc(look, look_size);
     }
 
-    return seen_into(r, e, look);
+    return seen_into(r, e, look, tabs);
 }
 
 /* A run may end before l: it starts a block, and no block before it can
@@ -365,7 +367,7 @@ int page_next(line** lines, int* n)
         if (tabs) {
             expanded_room(x, len, tabs);
         }
-        l = seen_into(r, e, tabs ? expanded + x : NULL);
+        l = seen_into(r, e, tabs ? expanded + x : NULL, tabs);
         if (count > 0 && !fenced && was_blank && starts_run(&l)) {
             break;
         }
