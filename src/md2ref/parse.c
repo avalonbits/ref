@@ -89,17 +89,17 @@ static const char* find(const char* s, int n, const char* pat)
     return NULL;
 }
 
-static int starts_at(const char* text, int len, const char* s)
+/* Whether the len bytes at text start with s, of n bytes. */
+static int starts_n(const char* text, int len, const char* s, int n)
 {
-    int n = (int)strlen(s);
-
     return len >= n && memcmp(text, s, (size_t)n) == 0;
 }
 
-static int starts(const line* l, const char* s)
-{
-    return starts_at(l->text, l->len, s);
-}
+/* The same for a literal, its length known as it is compiled: a strlen
+ * of it was a call, several a line. */
+#define starts_at(text, len, lit) starts_n((text), (len), (lit), (int)sizeof(lit) - 1)
+
+#define starts(l, lit) starts_at((l)->text, (l)->len, lit)
 
 /* --- what a line starts ------------------------------------------------------ */
 
