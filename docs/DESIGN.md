@@ -287,14 +287,23 @@ It ends with "Done in N.NN seconds", worded as zap and acc word it, from
 MOS's clock. Under an emulator running flat out that clock means nothing,
 so `make agon-md2ref-cycles` builds one that has the emulator count its
 cycles instead (IO ports 0x40 and 0x41, fab-agon-emulator 2037657 on), as
-acc's bench does. All of agon-docs takes 506 million cycles: 27 seconds
-at the Agon's 18.432 MHz (708 million with `-f`). That is a lower bound. The count is exact for
+acc's bench does. All of agon-docs takes 419 million cycles: 23 seconds
+at the Agon's 18.432 MHz (632 million with `-f`). That is a lower bound. The count is exact for
 the eZ80's own work, but the emulator charges nothing for reading the SD
 card, and md2ref reads its pages and three scratch files. The ports are
 written around the work alone, so loading and MOS's start-up are not
 counted. Counts compare only under the same MOS: test/emu.sh boots 3.0.2.
 `test/md2ref.sh` reports the figure, and fails when the emulator gives
 no count.
+
+**Two loops by hand.** Nearly every byte passes through two loops that
+agondev's clang compiles poorly, spilling every pointer to the frame:
+copying text into markup, and (with `-z`) LZ4's search for a match.
+Those two are in eZ80 assembly on the Agon, beside the C the PC runs:
+[`copytext.s`](../src/md2ref/copytext.s), for inline.c's copy_text, and
+[`lz4scan.s`](../src/md2ref/lz4scan.s). They do exactly what the C does,
+and `test/md2ref.sh` holds what the Agon writes to what the PC does, byte
+for byte -- agon-docs, and a page of the copy's edge cases.
 
 **Not the builder.** md2ref has no rules file: no hand-made keys, no link
 fixes, no gaps report, no shared dictionary. Its keys are what headings

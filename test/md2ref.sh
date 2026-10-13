@@ -47,6 +47,29 @@ printf '%s\r\n' 'cd /proj' 'md2ref myprog' \
                 'cd ref-doc' 'ref -p' 'ref -p myprog -k strtoul' \
                 'cd /proj' 'md2ref -e listed.txt listed @pages.mdl' \
                 'Try md2ref -e errors.txt bad bad/link.md' 'cd /' > "$sd/autoexec.txt"
+# A page of what the copy of text into markup (copytext.s on the Agon, C
+# on the PC) must get exactly right: runs of spaces before, inside and
+# after words; capitals, codes and links inside words; words at the very
+# end of a block; letters it does not copy as they are; code with spaces
+# and tabs; a word longer than any kept -- compiled with and without -f.
+mkdir -p "$SCRATCH/edge" "$sd/edge"
+python3 - "$SCRATCH/edge/index.md" <<'PY'
+import sys
+page = ('# Edge  Cases\n\n'
+        'one  two   three    four end\n  lead and trail  \n\n'
+        'HelloWorld ABC aBc x_y_z $var snake_case foo*bar*baz _a_b_ end\n\n'
+        'pre[mid](#edge-cases)post  pre**bold**post `a  b  c` ``x ` y``  q\n\n'
+        'caf\u00e9 na\u00efve \u2014 dash\u2192arrow \u00a0nbsp word\n\n'
+        + 'w' * 300 + ' after\n\n'
+        '```\n    x  =  1\n\tTab\tbed  Code\nEND\n```\n\n'
+        '| Head  One | `two  code` |\n|---|---|\n| *em  cell* | plain   cell |\n\n'
+        '## Sub  Head *with*  em\n\n!!! note "Note  Title"\n    body  text\n\nlast\n')
+open(sys.argv[1], 'w').write(page)
+PY
+cp "$SCRATCH/edge/index.md" "$sd/edge/"
+"$ROOT/out/host/md2ref" -w -o "$SCRATCH/edge.dat" "$SCRATCH/edge" > /dev/null
+"$ROOT/out/host/md2ref" -w -f -o "$SCRATCH/edge_f.dat" "$SCRATCH/edge" > /dev/null
+printf '%s\r\n' 'md2ref -w -o /edge.dat /edge' 'md2ref -w -f -o /edge_f.dat /edge' >> "$sd/autoexec.txt"
 if [ -n "$BIG" ]; then
     mkdir -p "$sd/big" "$SCRATCH/big"
     cp "$BIG"/*.md "$BIG"/*/*.md "$sd/big/"
@@ -70,6 +93,9 @@ check "md2ref -e @list on the Agon: the same document, and no errors in the file
 check "  an error goes in the file as on the console" \
       "$(tr -d '\r' < "$sd/proj/errors.txt" 2>/dev/null)" \
       "bad/link.md:5: error: cannot resolve link 'missing.md#here'"
+check "md2ref on the Agon: text copied as on the PC, its words with it" \
+      "$(md5sum < "$sd/edge.dat" 2>/dev/null) $(md5sum < "$sd/edge_f.dat" 2>/dev/null)" \
+      "$(md5sum < "$SCRATCH/edge.dat") $(md5sum < "$SCRATCH/edge_f.dat")"
 check "ref finds a topic in it by a code span" \
       "$(grep -c '^strtol, strtoul, strtoll$' <<< "$console")" 1
 if [ -n "$BIG" ]; then
@@ -82,7 +108,7 @@ fi
 # The time: the cycles from port 0x40's write to 0x41's, which the
 # emulator prints on the host, over the eZ80's 18.432 MHz.
 CYCLES_EMU=${CYCLES_EMU:-$HOME/fab-agon-emulator-2037657}
-BUDGET=780
+BUDGET=690
 if [ -z "$BIG" ]; then
     echo "SKIP  md2ref's time on the Agon: no build/cache (make dat)"
 elif [ ! -x "$CYCLES_EMU/agon-cli-emulator" ]; then

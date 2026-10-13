@@ -91,7 +91,15 @@ int agon_char(const char** s)
 static uint8_t* out;
 static int room;
 static int written;
-static int last_space;          /* the last byte written was a space */
+/* What copy_text keeps between calls, and copytext.s with it on the Agon:
+ * global, so that it can, cw_ for the copy's words. */
+extern uint8_t cw_space;
+extern uint8_t cw_on;
+extern uint8_t* cw_start;
+extern uint8_t cw_odd;
+extern const uint8_t* cw_to;
+void cw_end(uint8_t* end);
+uint8_t cw_space;                   /* the last byte written was a space */
 
 /* What each byte is to the copy below (copy_text), by the table for the
  * text being written: one look-up a byte says both whether the copy stops
@@ -102,34 +110,37 @@ static int last_space;          /* the last byte written was a space */
 #define C_WORD  3               /* in a word as it is: a-z, 0-9, _ and $ */
 #define C_CAP   4               /* in a word, lower-cased: a capital */
 
-static uint8_t cls_special[256];    /* text, for inlines: \ ` < ! [ * _ stop it */
-static uint8_t cls_plain[256];      /* text as it is: only what agon_char changes stops it */
-static uint8_t cls_code[256];       /* code: spaces as they are, a newline stops it */
+/* Aligned: copytext.s finds a byte's class by making it the low byte of
+ * the table's address. */
+#define CLASS_TABLE __attribute__((aligned(256)))
+static uint8_t cls_special[256] CLASS_TABLE;    /* text, for inlines: \ ` < ! [ * _ stop it */
+static uint8_t cls_plain[256] CLASS_TABLE;      /* text as it is: only what agon_char changes stops it */
+static uint8_t cls_code[256] CLASS_TABLE;       /* code: spaces as they are, a newline stops it */
 
-/* The words of what is written, taken as it is written: when words_on,
+/* The words of what is written, taken as it is written: when cw_on,
  * for a topic's markup, not a cell's or a title's. The word being
- * written starts at w_start (NULL when none is); w_odd says a capital or
+ * written starts at cw_start (NULL when none is); cw_odd says a capital or
  * a code is inside it, so words_span reads it again as words_markup
  * would; and a LINK's two bytes are not text (w_skip). */
-static uint8_t words_on;
-static uint8_t names_only;          /* WORDS_NAMES: words_on only inside a name */
+uint8_t cw_on;
+static uint8_t names_only;          /* WORDS_NAMES: cw_on only inside a name */
 static uint8_t name_depth;          /* the codes, links and emphases open */
-static uint8_t* w_start;
-static uint8_t w_odd;
+uint8_t* cw_start;
+uint8_t cw_odd;
 static uint8_t w_skip;
 
 /* The word being written ends at end: taken. Not when the markup is past
  * its room -- a topic too big, which is an error. */
-static NOINLINE void word_end(uint8_t* end)
+NOINLINE void cw_end(uint8_t* end)
 {
     if (end <= out + room) {
-        if (w_odd) {
-            words_span(w_start, end);
-        } else if (end - w_start >= 3) {
-            words_take(w_start, (unsigned)(end - w_start));
+        if (cw_odd) {
+            words_span(cw_start, end);
+        } else if (end - cw_start >= 3) {
+            words_take(cw_start, (unsigned)(end - cw_start));
         }
     }
-    w_start = NULL;
+    cw_start = NULL;
 }
 
 /* b, just written at out[written - 1], to the words: as words_markup
@@ -145,11 +156,11 @@ static NOINLINE void word_byte(uint8_t b)
     }
     if (b < 0x20) {
         if (b == BREAK || b == '\n' || b == 0) {
-            if (w_start) {
-                word_end(out + written - 1);
+            if (cw_start) {
+                cw_end(out + written - 1);
             }
         } else {
-            w_odd |= w_start != NULL;
+            cw_odd |= cw_start != NULL;
             if (b == LINK) {
                 w_skip = 2;
             }
@@ -159,15 +170,15 @@ static NOINLINE void word_byte(uint8_t b)
     }
     k = cls_plain[b];
     if (k == C_WORD || k == C_CAP) {
-        if (!w_start) {
-            w_start = out + written - 1;
-            w_odd = 0;
+        if (!cw_start) {
+            cw_start = out + written - 1;
+            cw_odd = 0;
         }
         if (k == C_CAP) {
-            w_odd = 1;
+            cw_odd = 1;
         }
-    } else if (w_start) {
-        word_end(out + written - 1);
+    } else if (cw_start) {
+        cw_end(out + written - 1);
     }
 }
 
@@ -177,12 +188,12 @@ static NOINLINE int name_edge(uint8_t b)
 {
     if (b == EM_ON || b == CODE_ON || b == LINK) {
         name_depth++;
-        words_on = 1;
+        cw_on = 1;
     } else if ((b == EM_OFF || b == CODE_OFF || b == LINK_END) && name_depth && !--name_depth) {
-        if (w_start) {
-            word_end(out + written - 1);
+        if (cw_start) {
+            cw_end(out + written - 1);
         }
-        words_on = 0;
+        cw_on = 0;
 
         return 1;                       /* nothing more of it for the words */
     }
@@ -197,11 +208,11 @@ static void put(int b)
     }
     written++;
     if (b >= 0x20) {
-        last_space = b == ' ';
+        cw_space = b == ' ';
     } else if (names_only && name_edge((uint8_t)b)) {
         return;
     }
-    if (words_on) {
+    if (cw_on) {
         word_byte((uint8_t)b);
     }
 }
@@ -209,7 +220,7 @@ static void put(int b)
 static void put_char(int c)
 {
     if (c == ' ') {
-        if (last_space) {
+        if (cw_space) {
             return;                 /* runs of spaces are one */
         }
     }
@@ -259,22 +270,29 @@ static void make_special(void)
 }
 
 /* Where copy_text stopped in its source. */
-static const uint8_t* copied_to;
+const uint8_t* cw_to;
 
 /* Text from s to e into o, up to the first byte cls says stops it: most
  * of every page, copied here in tight loops -- one between words, one in
  * a word -- and not a call or two a byte. A space after a space is
- * dropped, as put_char does; and each word, when words_on, is taken where
- * it lies as it ends (word_end), a call a word. A word still being
+ * dropped, as put_char does; and each word, when cw_on, is taken where
+ * it lies as it ends (cw_end), a call a word. A word still being
  * written where it stops stays open: what is written next may yet be in
  * it. Where in o it got to. */
+#if defined(AGONDEV)
+/* copytext.s: copy_text, by hand -- the same, byte for byte, which
+ * test/md2ref.sh holds the Agon's documents to. In C, agondev kept both
+ * pointers in the frame at every byte, some 55 cycles a byte. */
+uint8_t* copy_text_asm(const uint8_t* s, const uint8_t* e, uint8_t* o, const uint8_t* cls);
+#define copy_text copy_text_asm
+#else
 static uint8_t* copy_text(const uint8_t* s, const uint8_t* e, uint8_t* o, const uint8_t* cls)
 {
-    uint8_t sp = (uint8_t)last_space;
+    uint8_t sp = (uint8_t)cw_space;
     uint8_t c;
     uint8_t k;
 
-    if (w_start) {
+    if (cw_start) {
         goto in_word;
     }
     for (;;) {
@@ -301,9 +319,9 @@ static uint8_t* copy_text(const uint8_t* s, const uint8_t* e, uint8_t* o, const 
         if (k == C_STOP) {
             goto done;
         }
-        if (words_on) {
-            w_start = o;
-            w_odd = 0;
+        if (cw_on) {
+            cw_start = o;
+            cw_odd = 0;
         }
 in_word:
         sp = 0;
@@ -317,7 +335,7 @@ in_word:
                 *o++ = c;
                 s++;
             } else if (k == C_CAP) {
-                w_odd = 1;
+                cw_odd = 1;
                 *o++ = c;
                 s++;
             } else {
@@ -327,16 +345,17 @@ in_word:
         if (k == C_STOP) {
             goto done;
         }
-        if (w_start) {
-            word_end(o);
+        if (cw_start) {
+            cw_end(o);
         }
     }
 done:
-    last_space = sp;
-    copied_to = s;
+    cw_space = sp;
+    cw_to = s;
 
     return o;
 }
+#endif
 
 /* Text from k on, to the next byte cls says stops it: copy_text, or past
  * the room -- a topic too big, which is an error anyway -- as put_char,
@@ -352,10 +371,10 @@ static int plain_run(const char* text, int k, int n, const uint8_t* cls)
 
         written += (int)(copy_text(s, e, o, cls) - o);
 
-        return (int)((const char*)copied_to - text);
+        return (int)((const char*)cw_to - text);
     }
-    w_start = NULL;
-    sp = (uint8_t)last_space;
+    cw_start = NULL;
+    sp = (uint8_t)cw_space;
     while (s < e && cls[*s] != C_STOP) {
         uint8_t c = *s++;
 
@@ -372,7 +391,7 @@ static int plain_run(const char* text, int k, int n, const uint8_t* cls)
         }
         written++;
     }
-    last_space = sp;
+    cw_space = sp;
 
     return (int)((const char*)s - text);
 }
@@ -919,7 +938,7 @@ static void inlines_at(const char* s, int n, int in_link)
             if (len && (strncmp(s + k, "<br>", 4) == 0 || strncmp(s + k, "<br/>", 5) == 0
                         || strncmp(s + k, "<br />", 6) == 0)) {
                 put(BREAK);
-                last_space = 1;
+                cw_space = 1;
                 k += len;
             } else if (len && is_external(s + k + 1, len - 2)) {
                 put_text(s + k + 1, len - 2);       /* <https://...> */
@@ -975,15 +994,15 @@ int inline_markup(const page* p, int no, const char* s, uint8_t* o, int size, li
     if (!cls_plain['a']) {
         make_special();
     }
-    words_on = (uint8_t)(words == WORDS_ALL);
+    cw_on = (uint8_t)(words == WORDS_ALL);
     names_only = (uint8_t)(words == WORDS_NAMES);
     name_depth = 0;
-    w_start = NULL;
+    cw_start = NULL;
     w_skip = 0;
     out = o;
     room = size;
     written = 0;
-    last_space = 1;                 /* no space to start with */
+    cw_space = 1;                 /* no space to start with */
     cur_page = p;
     cur_no = no;
     resolve = links;
@@ -992,10 +1011,10 @@ int inline_markup(const page* p, int no, const char* s, uint8_t* o, int size, li
     ix_text_n = (int)strlen(s);
     scan_left = 2L * ix_text_n + 256;
     inlines(s, ix_text_n, 0);
-    if (w_start) {
-        word_end(out + written);            /* only codes and its END come after */
+    if (cw_start) {
+        cw_end(out + written);            /* only codes and its END come after */
     }
-    words_on = 0;
+    cw_on = 0;
     names_only = 0;
     ix_base = ix_text = NULL;
     /* No space to end with. */
@@ -1015,14 +1034,14 @@ int code_markup(const char* s, uint8_t* o, int size, int words)
     if (!cls_plain['a']) {
         make_special();
     }
-    words_on = (uint8_t)(words == WORDS_ALL);
+    cw_on = (uint8_t)(words == WORDS_ALL);
     names_only = 0;
-    w_start = NULL;
+    cw_start = NULL;
     w_skip = 0;
     out = o;
     room = size;
     written = 0;
-    last_space = 1;
+    cw_space = 1;
     while (s < e) {
         s += plain_run(s, 0, (int)(e - s), cls_code);
         if (s < e) {
@@ -1035,7 +1054,7 @@ int code_markup(const char* s, uint8_t* o, int size, int words)
         }
     }
     put('\n');
-    words_on = 0;
+    cw_on = 0;
 
     return written;
 }
