@@ -9,7 +9,7 @@ MOS 3.0.2.
 
 ## Installing
 
-Download `ref-0.4.0.zip` from the
+Download `ref-0.4.1.zip` from the
 [latest release](https://github.com/avalonbits/ref/releases/latest) and
 unzip it at the root of the SD card. Everything lands where ref looks for
 it:
@@ -21,7 +21,7 @@ it:
     /config/ref/docs/VERSION        ref's version, and which agon-docs
     /config/ref/docs/<name>.dat     any other document
 
-`ref-builder-0.4.0.zip` is the builder, to make mos.dat again on a PC or
+`ref-builder-0.4.1.zip` is the builder, to make mos.dat again on a PC or
 Mac (see [Building](#building)).
 
 A document's name is its file's, without `.dat`: one to eight lower-case
